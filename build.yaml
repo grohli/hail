@@ -2462,6 +2462,9 @@ steps:
       - name: fix-mark-job-complete-deadlocks
         script: /io/sql/117-fix-mark-job-complete-deadlocks.sql
         online: true
+      - name: add-lambda-inst-col
+        script: /io/sql/add_lambda_inst_col.sql
+        online: true
       - name: jobs-add-n-max-attempts
         script: /io/sql/118-jobs-add-n-max-attempts.sql
         online: true
