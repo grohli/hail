@@ -14,7 +14,7 @@ redis:6.0.6-alpine
 ubuntu:18.04
 ubuntu:19.04
 ubuntu:22.04
-ubuntu:24:04
+ubuntu:24.04
 ubuntu:bionic-20200921
 ubuntu:focal-20221019
 ubuntu:jammy-20250404
