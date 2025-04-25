@@ -5,6 +5,8 @@ set -e
 cd "$(dirname "$0")"
 source ../devbin/functions.sh
 
+NAMESPACE=grohlice
+
 if [ -z "${NAMESPACE}" ]; then
     echo "Must specify a NAMESPACE environment variable"
     exit 1;
@@ -14,7 +16,7 @@ PROJECT=$(get_global_config_field gcp_project $NAMESPACE)
 ZONE=$(get_global_config_field gcp_zone $NAMESPACE)
 DOCKER_ROOT_IMAGE=$(get_global_config_field docker_root_image $NAMESPACE)
 
-WORKER_IMAGE_VERSION=17
+WORKER_IMAGE_VERSION=100
 
 if [ "$NAMESPACE" == "default" ]; then
     WORKER_IMAGE=batch-worker-${WORKER_IMAGE_VERSION}
@@ -24,10 +26,13 @@ else
     BUILDER=build-batch-worker-$NAMESPACE-image
 fi
 
-UBUNTU_IMAGE=ubuntu-minimal-2204-jammy-v20250311
+# Naming convention for GCP images vs. regular ones:
+# gcloud compute images list <-- gives names of available images
+# We want the amd version, if the naming distinguishes from arm
+UBUNTU_IMAGE=ubuntu-minimal-2404-noble-amd64-v20250419
 
 create_build_image_instance() {
-    echo "Deleting any preexisting $BUILDER instance. This is expected to print an ERROR if the image does not exist."
+    echo "Deleting any preexisting $BUILDER build image instance. This is expected to print an ERROR if the image does not exist."
     gcloud -q compute --project ${PROJECT} instances delete \
         --zone=${ZONE} ${BUILDER} || true
 
@@ -52,7 +57,7 @@ create_build_image_instance() {
 }
 
 create_worker_image() {
-    echo "Deleting any preexisting $WORKER_IMAGE image. This is expected to print an ERROR if the image does not exist."
+    echo "Deleting any preexisting $WORKER_IMAGE worker image. This is expected to print an ERROR if the image does not exist."
     gcloud -q compute images delete $WORKER_IMAGE \
         --project ${PROJECT} || true
 
@@ -76,4 +81,4 @@ main() {
     create_worker_image
 }
 
-confirm "Building image $WORKER_IMAGE with properties:\n Version: ${WORKER_IMAGE_VERSION}\n Project: ${PROJECT}\n Zone: ${ZONE}" && main
+confirm "Building worker image $WORKER_IMAGE with properties:\n Version: ${WORKER_IMAGE_VERSION}\n Project: ${PROJECT}\n Zone: ${ZONE}" && main
