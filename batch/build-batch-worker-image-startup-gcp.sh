@@ -60,11 +60,11 @@ curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-contai
 
 apt-get update
 apt-get install -y build-essential
-# apt-get install -y gcc-12
-# apt-get install -y g++-12
+apt-get install -y gcc-13
+apt-get install -y g++-13
 
-update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 50
-update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 50
+update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 50
+update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 50
 
 wget --no-verbose https://us.download.nvidia.com/XFree86/Linux-x86_64/535.183.01/NVIDIA-Linux-x86_64-535.183.01.run
 chmod +x NVIDIA-Linux-x86_64-535.183.01.run

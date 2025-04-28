@@ -36,7 +36,8 @@ create_build_image_instance() {
     gcloud -q compute --project ${PROJECT} instances delete \
         --zone=${ZONE} ${BUILDER} || true
 
-    python3 ../ci/jinja2_render.py '{"global":{"docker_root_image":"'${DOCKER_ROOT_IMAGE}'"}}' \
+#    python3 ../ci/jinja2_render.py '{"global":{"docker_root_image":"'${DOCKER_ROOT_IMAGE}'"}}' \
+    python3 ../ci/jinja2_render.py '{"global":{"docker_root_image":"us-docker.pkg.dev/hail-vdc/hail/ubuntu:24.04"}}' \
         build-batch-worker-image-startup-gcp.sh build-batch-worker-image-startup-gcp.sh.out
 
     gcloud -q compute instances create ${BUILDER} \
