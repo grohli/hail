@@ -1,14 +1,9 @@
 #!/bin/bash
 
 set -ex
-echo "checkpoint here grohlice 1"
-#curl --silent --show-error --remote-name --fail https://dl.google.com/cloudagents/add-logging-agent-repo.sh
-#echo "checkpoint here grohlice 1.5"
-#bash add-logging-agent-repo.sh
 
-# See: https://cloud.google.com/stackdriver/docs/solutions/agents/ops-agent/installation
-curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
-sudo bash add-google-cloud-ops-agent-repo.sh --also-install
+curl --silent --show-error --remote-name --fail https://dl.google.com/cloudagents/add-logging-agent-repo.sh
+bash add-logging-agent-repo.sh
 
 
 # The nvidia toolkit must be installed in this startup script to be able to configure docker with the command nvidia-ctk runtime configure --runtime=docker. This command cannot be run from Dockerfile.worker
@@ -16,21 +11,18 @@ sudo bash add-google-cloud-ops-agent-repo.sh --also-install
 
 # Get the latest GPG key as it might not always be up to date
 # https://cloud.google.com/compute/docs/troubleshooting/known-issues#keyexpired
-
-# apt-key is depreciated in Ubuntu 24.04
-# Uncomment and use the below command if you're building, e.g., a 22.04 image
-# echo "checkpoint here grohlice 1.75"
-# curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
-echo "checkpoint here grohlice 2"
+curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
 apt-get update
-echo "checkpoint here grohlice 3"
+
 apt-get install -y \
     apt-transport-https \
     ca-certificates \
     curl \
+    google-fluentd \
+    google-fluentd-catch-all-config-structured \
     jq \
     software-properties-common
-echo "checkpoint here grohlice 4"
+
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
 
 add-apt-repository \
@@ -47,24 +39,24 @@ rm -rf /var/lib/apt/lists/*
 VERSION=2.0.4
 OS=linux
 ARCH=amd64
-echo "checkpoint here grohlice 4"
+
 curl -fsSL "https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v${VERSION}/docker-credential-gcr_${OS}_${ARCH}-${VERSION}.tar.gz" \
   | tar xz --to-stdout ./docker-credential-gcr \
 	> /usr/bin/docker-credential-gcr && chmod +x /usr/bin/docker-credential-gcr
-echo "checkpoint here grohlice 5"
+
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
      | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+curl -s -L https://nvidia.github.io/libnvidia-container/ubuntu22.04/libnvidia-container.list | \
     sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
     tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
 apt-get update
 apt-get install -y build-essential
-apt-get install -y gcc-13
-apt-get install -y g++-13
+apt-get install -y gcc-12
+apt-get install -y g++-12
 
-update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 50
-update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 50
+update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 50
+update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 50
 
 wget --no-verbose https://us.download.nvidia.com/XFree86/Linux-x86_64/535.183.01/NVIDIA-Linux-x86_64-535.183.01.run
 chmod +x NVIDIA-Linux-x86_64-535.183.01.run
