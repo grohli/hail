@@ -6,6 +6,7 @@ echo "checkpoint here grohlice 1"
 #echo "checkpoint here grohlice 1.5"
 #bash add-logging-agent-repo.sh
 
+# See: https://cloud.google.com/stackdriver/docs/solutions/agents/ops-agent/installation
 curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
 sudo bash add-google-cloud-ops-agent-repo.sh --also-install
 
@@ -18,8 +19,8 @@ sudo bash add-google-cloud-ops-agent-repo.sh --also-install
 
 # apt-key is depreciated in Ubuntu 24.04
 # Uncomment and use the below command if you're building, e.g., a 22.04 image
-echo "checkpoint here grohlice 1.75"
-curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+# echo "checkpoint here grohlice 1.75"
+# curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
 echo "checkpoint here grohlice 2"
 apt-get update
 echo "checkpoint here grohlice 3"
@@ -59,8 +60,8 @@ curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-contai
 
 apt-get update
 apt-get install -y build-essential
-apt-get install -y gcc-12
-apt-get install -y g++-12
+# apt-get install -y gcc-12
+# apt-get install -y g++-12
 
 update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 50
 update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 50
