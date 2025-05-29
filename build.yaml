@@ -2460,16 +2460,17 @@ steps:
         script: /io/sql/116-finalize-job-groups.sql
         online: true
       - name: fix-mark-job-complete-deadlocks
-        script: /io/sql/117-fix-mark-job-complete-deadlocks.sql
-        online: true
-      - name: add-lambda-inst-col
-        script: /io/sql/add_lambda_inst_col.sql
+        script: /io/sql/fix-mark-job-complete-deadlocks.sql
         online: true
       - name: jobs-add-n-max-attempts
         script: /io/sql/118-jobs-add-n-max-attempts.sql
         online: true
       - name: is-job-cancelled
         script: /io/sql/119-is-job-cancelled.sql
+        online: true
+      - name: add-lambda-inst-col
+        script: /io/sql/add_lambda_inst_col.sql
+        online: true
     inputs:
       - from: /repo/batch/sql
         to: /io/sql
