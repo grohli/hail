@@ -3,7 +3,7 @@ from typing import Dict
 
 from gear import Database
 from gear.cloud_config import get_gcp_config
-from hailtop import aiotools
+from hailtop import aiotools, httpx
 from hailtop.aiocloud import aiogoogle
 from hailtop.utils import RateLimit, periodically_call
 
@@ -13,10 +13,9 @@ from ....inst_coll_config import InstanceCollectionConfigs
 from .activity_logs import process_activity_log_events_since
 from .billing_manager import GCPBillingManager
 from .disks import delete_orphaned_disks
-from .resource_manager import GCPResourceManager
 from .resouce_manager_lambda import LambdaResourceManager
+from .resource_manager import GCPResourceManager
 from .zones import ZoneMonitor
-from hailtop import httpx
 
 
 class GCPDriver(CloudDriver):
@@ -107,7 +106,7 @@ ON DUPLICATE KEY UPDATE region = region;
             *create_pools_coros,
         )
 
-        assert isinstance(jpim, JobPrivateInstanceManager)
+        assert isinstance(jpim_gcp, JobPrivateInstanceManager)
         driver = GCPDriver(
             db,
             machine_name_prefix,
