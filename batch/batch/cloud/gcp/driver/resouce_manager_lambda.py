@@ -1,17 +1,14 @@
+import base64
+import json
 import logging
-import uuid
-from typing import List
 import os
-import requests
+from typing import List
 
 import aiohttp
 
-import json
-import base64
-from hailtop.utils import check_shell
-
-from hailtop.aiocloud import aiogoogle
-from hailtop.utils.time import parse_timestamp_msecs
+from gear import Database
+from hailtop import httpx
+from hailtop.utils import check_shell, retry_transient_errors
 
 from ....driver.instance import Instance
 from ....driver.resource_manager import (
@@ -24,21 +21,16 @@ from ....driver.resource_manager import (
     VMStateTerminated,
 )
 from ....file_store import FileStore
-from ....instance_config import InstanceConfig, QuantifiedResource
-from ..instance_config import GCPSlimInstanceConfig, LambdaSlimInstanceConfig
+from ....instance_config import QuantifiedResource
+from ..instance_config import LambdaSlimInstanceConfig
 from ..resource_utils import (
     GCP_MACHINE_FAMILY,
     family_worker_type_cores_to_gcp_machine_type,
     gcp_machine_type_to_cores_and_memory_bytes,
 )
 from .billing_manager import GCPBillingManager
-from .create_instance import create_vm_config
-from gear import Database
-from hailtop import httpx
-from hailtop.utils import retry_transient_errors
 
 log = logging.getLogger('resource_manager')
-
 
 
 class LambdaResourceManager(CloudResourceManager):
@@ -51,21 +43,16 @@ class LambdaResourceManager(CloudResourceManager):
         self.db = db
         self.billing_manager = billing_manager
         self.client_session = client_session
-    
+
     async def delete_vm(self, instance: Instance):
         API_KEY = os.environ['LAMBDA_API_KEY']
         BASE_URL = 'https://cloud.lambdalabs.com/api/v1/'
-        HEADERS = {
-            'Authorization': f'Bearer {API_KEY}',
-            'Content-Type': 'application/json'
-        }
+        HEADERS = {'Authorization': f'Bearer {API_KEY}', 'Content-Type': 'application/json'}
         instance_id = instance.instance_config.instance_id
-        
+
         if instance_id:
             url = f'{BASE_URL}instance-operations/terminate'
-            payload = {
-                "instance_ids": [instance_id]
-            }
+            payload = {"instance_ids": [instance_id]}
             try:
                 await self.client_session.post(url, headers=HEADERS, json=payload)
             except aiohttp.ClientResponseError as e:
@@ -74,35 +61,36 @@ class LambdaResourceManager(CloudResourceManager):
                 raise
 
     async def get_vm_state(self, instance: Instance) -> VMState:
-        
         API_KEY = os.environ['LAMBDA_API_KEY']
         BASE_URL = 'https://cloud.lambdalabs.com/api/v1/'
-        
+
         spec = 'lambda'
 
         instance_id = instance.instance_config.instance_id
         if not instance_id:
             return VMStateCreating(spec, instance.time_created)
-        
+
         log.error(f'lambda instance id: {instance_id}')
 
         url = f'{BASE_URL}instances/{instance_id}'
         payload = {
             "id": instance_id,
         }
-        
+
         try:
             instance_info = await retry_transient_errors(
-                        self.client_session.get_read_json, url, headers={'Authorization': f'Bearer {API_KEY}'}, json=payload
-                    )
+                self.client_session.get_read_json, url, headers={'Authorization': f'Bearer {API_KEY}'}, json=payload
+            )
             state = instance_info['data']['status']
             if state == 'booting':
                 return VMStateCreating(spec, instance.time_created)
             if state == 'active':
                 # last_start_timestamp_msecs = parse_timestamp_msecs(spec.get('lastStartTimestamp'))
                 # assert last_start_timestamp_msecs is not None
-                last_start_timestamp_msecs =  instance.time_created
-                await check_shell(f"""scp -i /lambda-ssh-key/lambda-ssh-key.pem -o StrictHostKeyChecking=no /lambda-gsa-key/key.json ubuntu@{instance_info['data']['ip']}:key.json""")
+                last_start_timestamp_msecs = instance.time_created
+                await check_shell(
+                    f"""scp -i /lambda-ssh-key/lambda-ssh-key.pem -o StrictHostKeyChecking=no /lambda-gsa-key/key.json ubuntu@{instance_info['data']['ip']}:key.json"""
+                )
                 command = f"""
 cat > run.sh <<'EOF'
 set -ex
@@ -160,7 +148,8 @@ python3 -u -m batch.worker.worker
 bash run.sh
 """
 
-                await check_shell(f"""ssh -i /lambda-ssh-key/lambda-ssh-key.pem -o StrictHostKeyChecking=no ubuntu@{instance_info['data']['ip']} 'bash -s > log.txt' <<EOF
+                await check_shell(
+                    f"""ssh -i /lambda-ssh-key/lambda-ssh-key.pem -o StrictHostKeyChecking=no ubuntu@{instance_info['data']['ip']} 'bash -s > log.txt' <<EOF
 {command}
 EOF""")
                 return VMStateRunning(spec, last_start_timestamp_msecs)
@@ -187,12 +176,7 @@ EOF""")
         location: str,
     ):
         return LambdaSlimInstanceConfig.create(
-            self.billing_manager.product_versions,
-            machine_type,
-            preemptible,
-            job_private,
-            location,
-            None
+            self.billing_manager.product_versions, machine_type, preemptible, job_private, location, None
         )
 
     async def update_lambda_vm_instance_id(self, machine_name, instance_config):
@@ -201,11 +185,38 @@ EOF""")
 UPDATE instances
 SET instance_config = %s WHERE name = %s;
 """,
-            (instance_config, machine_name,)
+            (
+                instance_config,
+                machine_name,
+            ),
         )
 
+    async def _available_regions(self, response_json, machine_type):
+        try:
+            # Field as specified in: https://cloud.lambda.ai/api/v1/docs#get-/api/v1/instance-types
+            log.info(f'Retrieved regional availability for {machine_type}.')
+            return response_json["data"][machine_type]["regions_with_capacity_available"]
+        except Exception:
+            log.exception(f'Error retrieving available regions for {machine_type}, nothing available in any region.')
+            return None
+
+    async def available_regions_from_machine_type(self, machine_type):
+        API_KEY = os.environ['LAMBDA_API_KEY']
+        BASE_URL = 'https://cloud.lambdalabs.com/api/v1/'
+        HEADERS = {'Authorization': f'Bearer {API_KEY}', 'Content-Type': 'application/json'}
+
+        try:
+            url = f'{BASE_URL}instance-types'
+            response = await self.client_session.post(url, headers=HEADERS)
+            log.info('Retrieved available instance information')
+            available_regions = await self._available_regions(response.json(), machine_type)
+            return available_regions
+        except Exception:
+            log.exception(f'Error retrieving available regions for {machine_type}')
+            return None
+
     async def create_vm(
-       self,
+        self,
         file_store: FileStore,
         machine_name: str,
         activation_token: str,
@@ -222,21 +233,19 @@ SET instance_config = %s WHERE name = %s;
         API_KEY = os.environ['LAMBDA_API_KEY']
         BASE_URL = 'https://cloud.lambdalabs.com/api/v1/'
 
-        HEADERS = {
-            'Authorization': f'Bearer {API_KEY}',
-            'Content-Type': 'application/json'
-        }
-
+        HEADERS = {'Authorization': f'Bearer {API_KEY}', 'Content-Type': 'application/json'}
+        available_regions = await self.available_regions_from_machine_type(machine_type)
+        avail_region = available_regions[0]['name']
         cores, memory_in_bytes = gcp_machine_type_to_cores_and_memory_bytes(machine_type)
         cores_mcpu = cores * 1000
         total_resources_on_instance = instance_config.quantified_resources(
             cpu_in_mcpu=cores_mcpu, memory_in_bytes=memory_in_bytes, extra_storage_in_gib=0
         )
-        
+
         try:
             url = f'{BASE_URL}instance-operations/launch'
             payload = {
-                "region_name": 'us-east-1',
+                "region_name": avail_region,
                 "instance_type_name": machine_type,
                 "ssh_key_names": ['batch-worker'],
                 "quantity": 1,
