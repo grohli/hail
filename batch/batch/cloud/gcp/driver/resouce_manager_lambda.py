@@ -208,7 +208,7 @@ SET instance_config = %s WHERE name = %s;
 
         try:
             url = f'{BASE_URL}instance-types'
-            response = await self.client_session.post(url, headers=HEADERS)
+            response = await self.client_session.get(url, headers=HEADERS)
             log.info('Retrieved available instance information')
             available_regions = await self._available_regions(response.json(), machine_type)
             return available_regions
