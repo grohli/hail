@@ -242,7 +242,6 @@ SET instance_config = %s WHERE name = %s;
         #     log.error(f'No available regions found for {machine_type}.')
         #     return None
         # avail_region = available_regions[0]['name']
-        avail_region = "us-south-1"
         cores, memory_in_bytes = gcp_machine_type_to_cores_and_memory_bytes(machine_type)
         cores_mcpu = cores * 1000
         total_resources_on_instance = instance_config.quantified_resources(
@@ -252,7 +251,7 @@ SET instance_config = %s WHERE name = %s;
         try:
             url = f'{BASE_URL}instance-operations/launch'
             payload = {
-                "region_name": avail_region,
+                "region_name": 'us-east-1',
                 "instance_type_name": machine_type,
                 "ssh_key_names": ['batch-worker'],
                 "quantity": 1,
