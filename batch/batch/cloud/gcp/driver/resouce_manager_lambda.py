@@ -46,7 +46,7 @@ class LambdaResourceManager(CloudResourceManager):
 
     async def delete_vm(self, instance: Instance):
         API_KEY = os.environ['LAMBDA_API_KEY']
-        BASE_URL = 'https://cloud.lambda.ai/api/v1/'
+        BASE_URL = 'https://cloud.lambdalabs.com/api/v1/'
         HEADERS = {'Authorization': f'Bearer {API_KEY}', 'Content-Type': 'application/json'}
         instance_id = instance.instance_config.instance_id
 
@@ -191,31 +191,31 @@ SET instance_config = %s WHERE name = %s;
             ),
         )
 
-    async def _available_regions(self, response_json, machine_type):
-        try:
-            # Field as specified in: https://cloud.lambda.ai/api/v1/docs#get-/api/v1/instance-types
-            regional_availability = response_json["data"][machine_type]["regions_with_capacity_available"]
-            log.info(f'Retrieved regional availability for {machine_type}.')
-            return regional_availability
-        except Exception:
-            log.exception(f'Error retrieving available regions for {machine_type}, nothing available in any region.')
-            return None
-
-    async def available_regions_from_machine_type(self, machine_type):
-        API_KEY = os.environ['LAMBDA_API_KEY']
-        BASE_URL = 'https://cloud.lambdalabs.com/api/v1/'
-        HEADERS = {'Authorization': f'Bearer {API_KEY}', 'Content-Type': 'application/json'}
-
-        try:
-            url = f'{BASE_URL}instance-types'
-            response = await self.client_session.get(url, headers=HEADERS)
-            log.info('Retrieved available instance information')
-            resp_json = await response.json()
-            available_regions = await self._available_regions(resp_json, machine_type)
-            return available_regions
-        except Exception:
-            log.exception(f'Error retrieving available regions for {machine_type}')
-            return None
+    # async def _available_regions(self, response_json, machine_type):
+    #     try:
+    #         # Field as specified in: https://cloud.lambda.ai/api/v1/docs#get-/api/v1/instance-types
+    #         regional_availability = response_json["data"][machine_type]["regions_with_capacity_available"]
+    #         log.info(f'Retrieved regional availability for {machine_type}.')
+    #         return regional_availability
+    #     except Exception:
+    #         log.exception(f'Error retrieving available regions for {machine_type}, nothing available in any region.')
+    #         return None
+    #
+    # async def available_regions_from_machine_type(self, machine_type):
+    #     API_KEY = os.environ['LAMBDA_API_KEY']
+    #     BASE_URL = 'https://cloud.lambdalabs.com/api/v1/'
+    #     HEADERS = {'Authorization': f'Bearer {API_KEY}', 'Content-Type': 'application/json'}
+    #
+    #     try:
+    #         url = f'{BASE_URL}instance-types'
+    #         response = await self.client_session.get(url, headers=HEADERS)
+    #         log.info('Retrieved available instance information')
+    #         resp_json = await response.json()
+    #         available_regions = await self._available_regions(resp_json, machine_type)
+    #         return available_regions
+    #     except Exception:
+    #         log.exception(f'Error retrieving available regions for {machine_type}')
+    #         return None
 
     async def create_vm(
         self,
@@ -251,7 +251,7 @@ SET instance_config = %s WHERE name = %s;
         try:
             url = f'{BASE_URL}instance-operations/launch'
             payload = {
-                "region_name": 'us-east-1',
+                "region_name": 'us-south-1',
                 "instance_type_name": machine_type,
                 "ssh_key_names": ['batch-worker'],
                 "quantity": 1,
