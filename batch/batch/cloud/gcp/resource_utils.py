@@ -116,7 +116,7 @@ n1_highcpu_machines = {
     for cores in [2, 4, 8, 16, 32, 64, 96]
 }
 
-MACHINE_TYPE_TO_PARTS = {
+MACHINE_TYPE_TO_PARTS_GCP = {
     **n1_standard_t4_machines,
     **n1_highmem_t4_machines,
     **n1_highcpu_t4_machines,
@@ -261,19 +261,24 @@ MACHINE_TYPE_TO_PARTS_LAMBDA = {
     ),
 }
 
+MACHINE_TYPE_TO_PARTS = {**MACHINE_TYPE_TO_PARTS_GCP, **MACHINE_TYPE_TO_PARTS_LAMBDA}
+
 gcp_valid_cores_for_pool_worker_type = {
     'highcpu': [2, 4, 8, 16, 32, 64, 96],
     'standard': [1, 2, 4, 8, 16, 32, 64, 96],
     'highmem': [2, 4, 8, 16, 32, 64, 96],
 }
 
+
 gcp_valid_machine_types = list(MACHINE_TYPE_TO_PARTS.keys())
+# lambda_valid_machine_types = list(MACHINE_TYPE_TO_PARTS_LAMBDA.keys())
 
 gcp_memory_to_worker_type = {'lowmem': 'highcpu', 'standard': 'standard', 'highmem': 'highmem'}
 
 
 def gcp_machine_type_to_parts(machine_type: str) -> Optional[MachineTypeParts]:
     return MACHINE_TYPE_TO_PARTS.get(machine_type)
+
 
 def lambda_machine_type_to_parts(machine_type: str) -> Optional[MachineTypeParts]:
     return MACHINE_TYPE_TO_PARTS_LAMBDA.get(machine_type)
