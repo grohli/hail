@@ -203,7 +203,7 @@ SET instance_config = %s WHERE name = %s;
 
     async def available_regions_from_machine_type(self, machine_type):
         API_KEY = os.environ['LAMBDA_API_KEY']
-        BASE_URL = 'https://cloud.lambda.ai/api/v1/'
+        BASE_URL = 'https://cloud.lambdalabs.com/api/v1/'
         HEADERS = {'Authorization': f'Bearer {API_KEY}', 'Content-Type': 'application/json'}
 
         try:
@@ -234,14 +234,15 @@ SET instance_config = %s WHERE name = %s;
     ) -> List[QuantifiedResource]:
         log.info("Creating VM...")
         API_KEY = os.environ['LAMBDA_API_KEY']
-        BASE_URL = 'https://cloud.lambda.ai/api/v1/'
+        BASE_URL = 'https://cloud.lambdalabs.com/api/v1/'
 
         HEADERS = {'Authorization': f'Bearer {API_KEY}', 'Content-Type': 'application/json'}
-        available_regions = await self.available_regions_from_machine_type(machine_type)
-        if not available_regions:
-            log.error(f'No available regions found for {machine_type}.')
-            return None
-        avail_region = available_regions[0]['name']
+        # available_regions = await self.available_regions_from_machine_type(machine_type)
+        # if not available_regions:
+        #     log.error(f'No available regions found for {machine_type}.')
+        #     return None
+        # avail_region = available_regions[0]['name']
+        avail_region = "us-south-1"
         cores, memory_in_bytes = gcp_machine_type_to_cores_and_memory_bytes(machine_type)
         cores_mcpu = cores * 1000
         total_resources_on_instance = instance_config.quantified_resources(
