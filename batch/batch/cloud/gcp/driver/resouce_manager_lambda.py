@@ -210,7 +210,8 @@ SET instance_config = %s WHERE name = %s;
             url = f'{BASE_URL}instance-types'
             response = await self.client_session.get(url, headers=HEADERS)
             log.info('Retrieved available instance information')
-            available_regions = await self._available_regions(response.json(), machine_type)
+            resp_json = await response.json()
+            available_regions = await self._available_regions(resp_json, machine_type)
             return available_regions
         except Exception:
             log.exception(f'Error retrieving available regions for {machine_type}')
@@ -231,11 +232,15 @@ SET instance_config = %s WHERE name = %s;
         machine_type: str,
         instance_config: LambdaSlimInstanceConfig,
     ) -> List[QuantifiedResource]:
+        log.info("Creating VM...")
         API_KEY = os.environ['LAMBDA_API_KEY']
         BASE_URL = 'https://cloud.lambda.ai/api/v1/'
 
         HEADERS = {'Authorization': f'Bearer {API_KEY}', 'Content-Type': 'application/json'}
         available_regions = await self.available_regions_from_machine_type(machine_type)
+        if not available_regions:
+            log.error(f'No available regions found for {machine_type}.')
+            return None
         avail_region = available_regions[0]['name']
         cores, memory_in_bytes = gcp_machine_type_to_cores_and_memory_bytes(machine_type)
         cores_mcpu = cores * 1000
