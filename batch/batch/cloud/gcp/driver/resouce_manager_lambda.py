@@ -191,6 +191,41 @@ SET instance_config = %s WHERE name = %s;
             ),
         )
 
+    async def _available_regions(self, response_json, machine_type):
+        try:
+            # Field as specified in Lambda Labs API docs
+            # https://cloud.lambda.ai/api/v1/docs#get-/api/v1/instance-types
+            regional_availability = response_json["data"][machine_type]["regions_with_capacity_available"]
+            log.info(f'Retrieved regional availability for {machine_type}: {regional_availability}')
+            return regional_availability
+        except Exception:
+            log.exception(f'Error retrieving available regions for {machine_type}, nothing available in any region.')
+            return []  # Return empty list instead of None
+
+    async def available_regions_from_machine_type(self, machine_type):
+        API_KEY = os.environ.get('LAMBDA_API_KEY')
+        if not API_KEY:
+            log.error('No API key given, LAMBDA_API_KEY environment variable not set')
+            raise RuntimeError('No API key given, LAMBDA_API_KEY environment variable not set')
+
+        BASE_URL = 'https://cloud.lambdalabs.com/api/v1/'
+        HEADERS = {'Authorization': f'Bearer {API_KEY}', 'Content-Type': 'application/json'}
+
+        try:
+            url = f'{BASE_URL}instance-types'
+            log.error(f'Making GET request to: {url}')
+            response = await self.client_session.get(url, headers=HEADERS)
+            log.error(f'Response status: {response.status}')
+
+            response_data = await response.json()
+            log.error(f'Response data keys: {list(response_data.keys()) if response_data else "No data"}')
+
+            available_regions = await self._available_regions(response_data, machine_type)
+            return available_regions[0]['name']
+        except Exception as e:
+            log.error(f'Error retrieving available regions for {machine_type}: {type(e).__name__}: {e!s}')
+            raise e
+
     async def create_vm(
         self,
         file_store: FileStore,
@@ -208,31 +243,58 @@ SET instance_config = %s WHERE name = %s;
     ) -> List[QuantifiedResource]:
         API_KEY = os.environ['LAMBDA_API_KEY']
         BASE_URL = 'https://cloud.lambdalabs.com/api/v1/'
-
         HEADERS = {'Authorization': f'Bearer {API_KEY}', 'Content-Type': 'application/json'}
 
+        default_region = 'us-east-1'
         cores, memory_in_bytes = gcp_machine_type_to_cores_and_memory_bytes(machine_type)
         cores_mcpu = cores * 1000
         total_resources_on_instance = instance_config.quantified_resources(
             cpu_in_mcpu=cores_mcpu, memory_in_bytes=memory_in_bytes, extra_storage_in_gib=0
         )
 
+        # Get available regions for this machine type
+        try:
+            available_regions = await self.available_regions_from_machine_type(machine_type)
+            if not available_regions:
+                raise RuntimeError(f'No available regions found for machine type {machine_type}')
+
+            # Use the first available region
+            avail_region = available_regions[0]['name']
+            log.error(f'Selected region {avail_region} for machine type {machine_type}')
+
+        except Exception as e:
+            log.error(f'Failed to get available regions for {machine_type}: {e}')
+            # Fallback to hardcoded region for now
+            avail_region = default_region
+            log.error(f'Falling back to default region: {avail_region}')
+
         try:
             url = f'{BASE_URL}instance-operations/launch'
             payload = {
-                "region_name": 'us-east-1',
+                "region_name": avail_region,
                 "instance_type_name": machine_type,
                 "ssh_key_names": ['batch-worker'],
                 "quantity": 1,
             }
-            log.error(f'requests payload: {payload}')
+            log.error(f'LambdaLabs API request payload: {payload}')
             response = await self.client_session.post(url, headers=HEADERS, json=payload)
-            instance_id = (await response.json())['data']['instance_ids'][0]
+            log.error(f'LambdaLabs API response status: {response.status}')
+
+            response_data = await response.json()
+            log.error(f'LambdaLabs API response data: {response_data}')
+
+            if response.status != 200:
+                raise RuntimeError(f'LambdaLabs API returned status {response.status}: {response_data}')
+
+            instance_id = response_data['data']['instance_ids'][0]
             instance_config.instance_id = instance_id
             new_instance_config = base64.b64encode(json.dumps(instance_config.to_dict()).encode()).decode()
             log.error(f'created machine {machine_name} with instance id {instance_id}')
             await self.update_lambda_vm_instance_id(machine_name, new_instance_config)
-        except Exception:
+
+        except Exception as e:
+            log.error(f'Full exception details: {type(e).__name__}: {e!s}')
             log.exception(f'error while creating machine {machine_name}')
+            raise e
 
         return total_resources_on_instance
