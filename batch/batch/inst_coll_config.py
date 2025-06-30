@@ -292,6 +292,12 @@ LEFT JOIN pools ON inst_colls.name = pools.name;
                 config = JobPrivateInstanceManagerConfig.from_record(record)
                 jpim_config[config.cloud] = config
         assert len(jpim_config) > 0
+
+        # DEBUG: Log available instance collections
+        log.info(f"Available instance collections: {list(jpim_config.keys())}")
+        for cloud, config in jpim_config.items():
+            log.info(f"  {cloud}: {config.name}")
+
         return name_pool_config, jpim_config
 
     @staticmethod
