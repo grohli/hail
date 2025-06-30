@@ -221,7 +221,7 @@ SET instance_config = %s WHERE name = %s;
             log.error(f'Response data keys: {list(response_data.keys()) if response_data else "No data"}')
 
             available_regions = await self._available_regions(response_data, machine_type)
-            return available_regions[0]['name']
+            return available_regions
         except Exception as e:
             log.error(f'Error retrieving available regions for {machine_type}: {type(e).__name__}: {e!s}')
             raise e
