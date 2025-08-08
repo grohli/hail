@@ -13,8 +13,8 @@ from ....inst_coll_config import InstanceCollectionConfigs
 from .activity_logs import process_activity_log_events_since
 from .billing_manager import GCPBillingManager
 from .disks import delete_orphaned_disks
-from .resouce_manager_lambda import LambdaResourceManager
 from .resource_manager import GCPResourceManager
+from .resource_manager_lambda import LambdaResourceManager
 from .zones import ZoneMonitor
 
 
