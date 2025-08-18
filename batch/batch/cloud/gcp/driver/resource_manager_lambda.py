@@ -290,12 +290,18 @@ SET instance_config = %s WHERE name = %s;
             instance_id = response_data['data']['instance_ids'][0]
             instance_config.instance_id = instance_id
             new_instance_config = base64.b64encode(json.dumps(instance_config.to_dict()).encode()).decode()
-            log.info(f'created Lambda Labsmachine {machine_name} with instance id {instance_id}')
+            log.info(f'created Lambda Labs machine {machine_name} with instance id {instance_id}')
             await self.update_lambda_vm_instance_id(machine_name, new_instance_config)
 
         except Exception as e:
             log.error(f'Full exception details: {type(e).__name__}: {e!s}')
             log.exception(f'error while creating Lambda Labs machine {machine_name}')
             raise e
+
+        # TODO: create a function that checks the state of the VM
+        # if the VM is running, then call create_vm_config_lambda() after this try-except block.
+        # This will entail a step where we call _transfer_credentials and _setup_batch_worker.
+        # As such, we need to pass (among other things) the IP address of the VM.
+        # This can be accessed via instance_info['data']['ip'] as per above.
 
         return total_resources_on_instance
