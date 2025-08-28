@@ -257,7 +257,7 @@ SET instance_config = %s WHERE name = %s;
             payload = {
                 "region_name": avail_region,
                 "instance_type_name": machine_type,
-                "ssh_key_names": ['batch-worker-dev-tmp'],
+                "ssh_key_names": ['batch-worker-dev-temp'],
                 "file_system_names": [f'lambda-fs-{avail_region}'],
                 "quantity": 1,
             }
