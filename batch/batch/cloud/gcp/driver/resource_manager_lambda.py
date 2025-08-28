@@ -86,6 +86,8 @@ class LambdaResourceManager(CloudResourceManager):
             if state == 'booting':
                 return VMStateCreating(spec, instance.time_created)
             if state == 'active':
+                log.info(f'lambda instance {instance_id} is now active')
+                log.info(f'lambda instance_info: {instance_info}')
                 # last_start_timestamp_msecs = parse_timestamp_msecs(spec.get('lastStartTimestamp'))
                 # assert last_start_timestamp_msecs is not None
                 last_start_timestamp_msecs = instance.time_created
@@ -274,7 +276,8 @@ SET instance_config = %s WHERE name = %s;
             payload = {
                 "region_name": avail_region,
                 "instance_type_name": machine_type,
-                "ssh_key_names": ['batch-worker'],
+                "ssh_key_names": ['batch-worker-dev-tmp'],
+                "file_system_names": [f'lambda-fs-{avail_region}'],
                 "quantity": 1,
             }
             log.info(f'LambdaLabs API request payload: {payload}')
