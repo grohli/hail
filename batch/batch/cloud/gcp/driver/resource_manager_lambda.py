@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import logging
@@ -8,7 +9,7 @@ import aiohttp
 
 from gear import Database
 from hailtop import httpx
-from hailtop.utils import check_shell, retry_transient_errors
+from hailtop.utils import retry_transient_errors
 
 from ....driver.instance import Instance
 from ....driver.resource_manager import (
@@ -77,7 +78,6 @@ class LambdaResourceManager(CloudResourceManager):
         payload = {
             "id": instance_id,
         }
-
         try:
             instance_info = await retry_transient_errors(
                 self.client_session.get_read_json, url, headers={'Authorization': f'Bearer {API_KEY}'}, json=payload
@@ -91,70 +91,6 @@ class LambdaResourceManager(CloudResourceManager):
                 # last_start_timestamp_msecs = parse_timestamp_msecs(spec.get('lastStartTimestamp'))
                 # assert last_start_timestamp_msecs is not None
                 last_start_timestamp_msecs = instance.time_created
-                await check_shell(
-                    f"""scp -i /lambda-ssh-key/lambda-ssh-key.pem -o StrictHostKeyChecking=no /lambda-gsa-key/key.json ubuntu@{instance_info['data']['ip']}:key.json"""
-                )
-                command = f"""
-cat > run.sh <<'EOF'
-set -ex
-sudo gcloud auth activate-service-account --key-file=key.json
-sudo gcloud auth configure-docker us-docker.pkg.dev --quiet
-sudo docker pull us-docker.pkg.dev/hail-vdc/hail/batch-worker:cache
-sudo mkdir /host
-INSTANCE_CONFIG='{base64.b64encode(json.dumps(instance.instance_config.to_dict()).encode()).decode()}'
-sudo docker run \
---name worker \
--e CLOUD=lambda \
--e CORES=10 \
--e NAME=lambda-worker-blah \
--e NAMESPACE=parsa \
--e ACTIVATION_TOKEN=abcdef \
--e IP_ADDRESS={instance_info['data']['ip']} \
--e BATCH_LOGS_STORAGE_URI=gs://nnf-parsa \
--e INSTANCE_ID=lambda-machine \
--e PROJECT=hail-vdc \
--e ZONE=us-central1a \
--e REGION=us-central \
--e DOCKER_PREFIX=us-docker.pkg.dev/hail-vdc/hail \
--e DOCKER_ROOT_IMAGE=ubuntu:22.04 \
--e INSTANCE_CONFIG=$INSTANCE_CONFIG \
--e MAX_IDLE_TIME_MSECS=30000 \
--e BATCH_WORKER_IMAGE=us-docker.pkg.dev/hail-vdc/hail/batch-worker:cache \
--e BATCH_WORKER_IMAGE_ID=jldksfja \
--e INTERNET_INTERFACE=eth0 \
--e UNRESERVED_WORKER_DATA_DISK_SIZE_GB=5 \
--e ACCEPTABLE_QUERY_JAR_URL_PREFIX=gs://nnf-parsa \
--e INTERNAL_GATEWAY_IP=kjdfjklsdajflksadjf \
--v /var/run/docker.sock:/var/run/docker.sock \
--v /var/run/netns:/var/run/netns:shared \
--v /usr/bin/docker:/usr/bin/docker \
--v /batch:/batch:shared \
--v /logs:/logs \
--v /global-config:/global-config \
--v /deploy-config:/deploy-config \
--v /cloudfuse:/cloudfuse:shared \
--v /etc/netns:/etc/netns \
--v /sys/fs/cgroup:/sys/fs/cgroup \
---mount type=bind,source=/host,target=/host \
---mount type=bind,source=/dev,target=/dev,bind-propagation=rshared \
---device /dev/fuse \
---device /dev \
---privileged \
---cap-add SYS_ADMIN \
---security-opt apparmor:unconfined \
---network host \
---cgroupns host \
---gpus all \
-us-docker.pkg.dev/hail-vdc/hail/batch-worker:cache \
-python3 -u -m batch.worker.worker
-'EOF'
-bash run.sh
-"""
-
-                await check_shell(
-                    f"""ssh -i /lambda-ssh-key/lambda-ssh-key.pem -o StrictHostKeyChecking=no ubuntu@{instance_info['data']['ip']} 'bash -s > log.txt' <<EOF
-{command}
-EOF""")
                 return VMStateRunning(spec, last_start_timestamp_msecs)
             if state in ('terminating', 'terminated'):
                 return VMStateTerminated(spec)
@@ -229,6 +165,51 @@ SET instance_config = %s WHERE name = %s;
             log.error(f'Error retrieving available regions for {machine_type}: {type(e).__name__}: {e!s}')
             raise e
 
+    async def _wait_for_vm_active(self, instance_id: str, timeout_seconds: int = 900) -> dict:
+        API_KEY = os.environ['LAMBDA_API_KEY']
+        start_time = asyncio.get_event_loop().time()
+        poll_interval = 10
+
+        log.info(f'Waiting for Lambda VM {instance_id} to become active...')
+
+        while True:
+            current_time = asyncio.get_event_loop().time()
+            elapsed = current_time - start_time
+
+            if elapsed > timeout_seconds:
+                raise RuntimeError(f'Lambda VM {instance_id} did not become active within {timeout_seconds} seconds')
+
+            try:
+                # Poll Lambda Labs API directly for VM state
+                url = f'https://cloud.lambdalabs.com/api/v1/instances/{instance_id}'
+                instance_info = await retry_transient_errors(
+                    self.client_session.get_read_json, url, headers={'Authorization': f'Bearer {API_KEY}'}
+                )
+
+                state = instance_info['data']['status']
+
+                if state == 'active':
+                    log.info(f'Lambda VM {instance_id} is now active after {elapsed:.1f} seconds')
+                    return instance_info
+
+                elif state in ('terminating', 'terminated'):
+                    raise RuntimeError(f'Lambda VM {instance_id} was terminated during startup')
+
+                elif state == 'booting':
+                    log.info(f'Lambda VM {instance_id} still booting... (elapsed: {elapsed:.1f}s)')
+
+                else:
+                    log.warning(f'Lambda VM {instance_id} in unexpected state: {state}')
+
+            except aiohttp.ClientResponseError as e:
+                if e.status == 404:
+                    raise RuntimeError(f'Lambda VM {instance_id} does not exist') from e
+                log.warning(f'HTTP error checking VM state (will retry): {e}')
+            except Exception as e:
+                log.warning(f'Error checking VM state (will retry): {e}')
+
+            await asyncio.sleep(poll_interval)
+
     async def create_vm(
         self,
         file_store: FileStore,
@@ -301,10 +282,21 @@ SET instance_config = %s WHERE name = %s;
             log.exception(f'error while creating Lambda Labs machine {machine_name}')
             raise e
 
-        # TODO: create a function that checks the state of the VM
-        # if the VM is running, then call create_vm_config_lambda() after this try-except block.
-        # This will entail a step where we call _transfer_credentials and _setup_batch_worker.
-        # As such, we need to pass (among other things) the IP address of the VM.
-        # This can be accessed via instance_info['data']['ip'] as per above.
+        # Wait for the VM to become active and get the instance info (including IP)
+        try:
+            # Poll until the VM becomes active using just the instance_id
+            instance_info = await self._wait_for_vm_active(instance_id)
+            instance_ip = instance_info['data']['ip']
+
+            log.info(f'Lambda VM {machine_name} is now active at IP {instance_ip}')
+
+            # TODO: Call create_vm_config_lambda() here when ready
+            # This will transfer credentials and set up the batch worker
+            # await create_vm_config_lambda(instance_ip, activation_token, machine_name, ...)
+
+        except Exception as e:
+            log.error(f'Failed to wait for Lambda VM {machine_name} to become active: {e}')
+            # Consider whether to delete the VM here or let it be cleaned up later
+            raise e
 
         return total_resources_on_instance
