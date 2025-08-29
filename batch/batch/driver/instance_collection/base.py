@@ -72,7 +72,7 @@ class InstanceCollectionManager:
     ) -> str:
         if machine_type.startswith('gpu_'):
             return 'lambda'
-        
+
         if self._default_region in regions and self.global_live_cores_mcpu // 1000 < 1_000:
             regions = [self._default_region]
         return self.location_monitor.choose_location(
@@ -406,7 +406,7 @@ class InstanceCollection:
             log.info(f'{instance} delete already done')
             await self.remove_instance(instance, reason, timestamp)
 
-    async def check_on_instance(self, instance: Instance):
+    async def check_on_instance(self, instance: Instance, debug=False):
         active_and_healthy = await instance.check_is_active_and_healthy()
 
         if instance.state == 'active' and instance.failed_request_count > 5:
@@ -427,7 +427,39 @@ class InstanceCollection:
 
         # Cases are mutually exclusive and therefore order-independent
         if instance.state == 'pending' and isinstance(vm_state, (VMStateCreating, VMStateRunning)):
-            if vm_state.time_since_last_state_change() > 5 * 60 * 1000:
+            if debug:
+                # DEBUG: Log all instance fields for Lambda Labs debugging
+                log.error(f'DEBUG INSTANCE FIELDS for LambdaVM {instance.name}:')
+                log.error(f'LambdaVM {instance.name} - state: {instance.state}')
+                log.error(f'LambdaVM {instance.name} - cores_mcpu: {instance.cores_mcpu}')
+                log.error(f'LambdaVM {instance.name} - free_cores_mcpu: {instance._free_cores_mcpu}')
+                log.error(f'LambdaVM {instance.name} - time_created: {instance.time_created}')
+                log.error(f'LambdaVM {instance.name} - failed_request_count: {instance._failed_request_count}')
+                log.error(f'LambdaVM {instance.name} - last_updated: {instance._last_updated}')
+                log.error(f'LambdaVM {instance.name} - ip_address: {instance.ip_address}')
+                log.error(f'LambdaVM {instance.name} - version: {instance.version}')
+                log.error(f'LambdaVM {instance.name} - location: {instance.location}')
+                log.error(f'LambdaVM {instance.name} - machine_type: {instance.machine_type}')
+                log.error(f'LambdaVM {instance.name} - preemptible: {instance.preemptible}')
+                log.error(f'LambdaVM {instance.name} - instance_config: {instance.instance_config}')
+                log.error(f'LambdaVM {instance.name} - instance_config.to_dict(): {instance.instance_config.to_dict()}')
+                log.error(f'LambdaVM {instance.name} - inst_coll: {instance.inst_coll}')
+                log.error(f'LambdaVM {instance.name} - inst_coll.name: {instance.inst_coll.name}')
+                log.error(f'LambdaVM {instance.name} - inst_coll.cloud: {instance.inst_coll.cloud}')
+                log.error(
+                    f'LambdaVM {instance.name} - inst_coll.machine_name_prefix: {instance.inst_coll.machine_name_prefix}'
+                )
+                log.error(f'LambdaVM {instance.name} - inst_coll.is_pool: {instance.inst_coll.is_pool}')
+                log.error(f'LambdaVM {instance.name} - vm_state: {vm_state}')
+                log.error(f'LambdaVM {instance.name} - vm_state.spec: {vm_state.spec}')
+                log.error(
+                    f'LambdaVM {instance.name} - vm_state.time_since_last_state_change(): {vm_state.time_since_last_state_change()}'
+                )
+            if instance.inst_coll.cloud == 'lambda':
+                if vm_state.time_since_last_state_change() > 15 * 60 * 1000:
+                    log.exception(f'{instance} (state: {vm_state}) has made no progress in last 15m, deleting')
+                    await self.call_delete_instance(instance, 'activation_timeout')
+            elif vm_state.time_since_last_state_change() > 5 * 60 * 1000:
                 log.exception(f'{instance} (state: {vm_state}) has made no progress in last 5m, deleting')
                 await self.call_delete_instance(instance, 'activation_timeout')
         elif instance.state in ('pending', 'active') and isinstance(vm_state, VMStateTerminated):

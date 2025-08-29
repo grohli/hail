@@ -165,10 +165,10 @@ SET instance_config = %s WHERE name = %s;
             log.error(f'Error retrieving available regions for {machine_type}: {type(e).__name__}: {e!s}')
             raise e
 
-    async def _wait_for_vm_active(self, instance_id: str, timeout_seconds: int = 900) -> dict:
+    async def _wait_for_vm_active(self, instance_id: str, timeout_seconds: int = 1200) -> dict:
         API_KEY = os.environ['LAMBDA_API_KEY']
         start_time = asyncio.get_event_loop().time()
-        poll_interval = 10
+        poll_interval = 30
 
         log.info(f'Waiting for Lambda VM {instance_id} to become active...')
 
@@ -280,23 +280,6 @@ SET instance_config = %s WHERE name = %s;
         except Exception as e:
             log.error(f'Full exception details: {type(e).__name__}: {e!s}')
             log.exception(f'error while creating Lambda Labs machine {machine_name}')
-            raise e
-
-        # Wait for the VM to become active and get the instance info (including IP)
-        try:
-            # Poll until the VM becomes active using just the instance_id
-            instance_info = await self._wait_for_vm_active(instance_id)
-            instance_ip = instance_info['data']['ip']
-
-            log.info(f'Lambda VM {machine_name} is now active at IP {instance_ip}')
-
-            # TODO: Call create_vm_config_lambda() here when ready
-            # This will transfer credentials and set up the batch worker
-            # await create_vm_config_lambda(instance_ip, activation_token, machine_name, ...)
-
-        except Exception as e:
-            log.error(f'Failed to wait for Lambda VM {machine_name} to become active: {e}')
-            # Consider whether to delete the VM here or let it be cleaned up later
             raise e
 
         return total_resources_on_instance
