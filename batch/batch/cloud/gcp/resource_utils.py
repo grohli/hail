@@ -255,8 +255,29 @@ MACHINE_TYPE_TO_PARTS_LAMBDA = {
     'gpu_1x_a10': MachineTypeParts(
         cores=92,
         memory=gib_to_bytes(460),
-        gpu_config=GPUConfig(num_gpus=8, gpu_type='l4'),
-        machine_family='v100',
+        gpu_config=GPUConfig(num_gpus=1, gpu_type='l4'),
+        machine_family='a10',
+        worker_type='lambda',
+    ),
+    'gpu_1x_a100_sxm4': MachineTypeParts(
+        cores=30,
+        memory=gib_to_bytes(460),
+        gpu_config=GPUConfig(num_gpus=1, gpu_type='l4'),
+        machine_family='a100',
+        worker_type='lambda',
+    ),
+    'gpu_1x_rtx6000': MachineTypeParts(
+        cores=92,
+        memory=gib_to_bytes(460),
+        gpu_config=GPUConfig(num_gpus=1, gpu_type='l4'),
+        machine_family='rtx6000',
+        worker_type='lambda',
+    ),
+    'gpu_2x_a6000': MachineTypeParts(
+        cores=92,
+        memory=gib_to_bytes(460),
+        gpu_config=GPUConfig(num_gpus=2, gpu_type='l4'),
+        machine_family='a6000',
         worker_type='lambda',
     ),
 }

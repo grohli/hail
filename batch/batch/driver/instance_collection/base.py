@@ -335,6 +335,23 @@ class InstanceCollection:
         self.name_instance[instance.name] = instance
         self.adjust_for_add_instance(instance)
 
+    async def _set_up_lambda_vm(self, instance: Instance):
+        """
+        Placeholder function called once when a Lambda Labs VM first becomes active.
+        This is where Lambda-specific setup logic will be implemented.
+        """
+        log.info(f'Hello world - LambdaVM {instance.name} setup placeholder called!')
+        try:
+            before_setup = getattr(instance, '_lambda_setup_completed', False)
+            log.info(f'LambdaVM {instance.name} _lambda_setup_completed before setup: {before_setup}')
+            instance._lambda_setup_completed = True
+            log.info(f'LambdaVM {instance.name} setup completed: {instance._lambda_setup_completed}')
+        except Exception as e:
+            log.error(f'Error executing startup script for Lambda VM {instance.name}: {e}')
+            raise e
+
+        # TODO: Add Lambda Labs VM setup logic here
+
     async def _create_instance(
         self,
         app,
@@ -424,6 +441,24 @@ class InstanceCollection:
         except VMDoesNotExist:
             await self.remove_instance(instance, 'does_not_exist')
             return
+
+        # Check for Lambda Labs VM becoming active for the first time
+        lambda_setup_completed = getattr(instance, '_lambda_setup_completed', False)
+
+        # DEBUG: Always log for Lambda Labs VMs to see what's happening
+        if instance.inst_coll.cloud == 'lambda':
+            log.info(
+                f'LAMBDA DEBUG: {instance.name} - cloud={instance.inst_coll.cloud}, vm_state={type(vm_state).__name__}, setup_completed={lambda_setup_completed}'
+            )
+
+        if instance.inst_coll.cloud == 'lambda' and isinstance(vm_state, VMStateRunning) and not lambda_setup_completed:
+            log.info(f'LambdaVM {instance.name} is now active - running one-time setup')
+            try:
+                await self._set_up_lambda_vm(instance)
+                log.info(f'LambdaVM {instance.name} setup completed successfully')
+            except Exception as e:
+                log.error(f'LambdaVM {instance.name} setup failed: {e}')
+                # Don't re-raise - let VM continue normal lifecycle
 
         # Cases are mutually exclusive and therefore order-independent
         if instance.state == 'pending' and isinstance(vm_state, (VMStateCreating, VMStateRunning)):

@@ -165,6 +165,11 @@ SET instance_config = %s WHERE name = %s;
             log.error(f'Error retrieving available regions for {machine_type}: {type(e).__name__}: {e!s}')
             raise e
 
+    async def _on_active(self, instance: Instance):
+        log.info(f'Lambda VM {instance.instance_config.instance_id} is now active - running one-time setup')
+        await self._lambda_vm_first_active_setup(instance)
+        instance._lambda_setup_completed = True
+
     async def _wait_for_vm_active(self, instance_id: str, timeout_seconds: int = 1200) -> dict:
         API_KEY = os.environ['LAMBDA_API_KEY']
         start_time = asyncio.get_event_loop().time()
