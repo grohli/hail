@@ -271,6 +271,40 @@ VALUES (%s, %s);
         self._free_cores_mcpu += delta_mcpu
         self.inst_coll.adjust_for_add_instance(self)
 
+    async def mount_squashfs(self):
+        # THIS IS A PLACEHOLDER.
+        # REVISIT THIS AND COMPLETE WHEN YOU'VE GOTTEN A PATHOLOGICALLY SIMPLE SCRIPT WORKING.
+        # TEST THIS FUNCTIONALITY MANUALLY ON A SEPARATE VM FIRST.
+        import paramiko  # Import only when needed to avoid Docker image dependency (put this at top of script once debugging is done)
+
+        log.info(f'LambdaVM {self.name}: IP address: {self.ip_address}')
+        with open('/lambda-ssh-key/lambda-ssh-key', 'r') as key_file:
+            private_key = paramiko.RSAKey.from_private_key(key_file)
+        squashfs_name = 'batch-worker-lambda.squashfs'
+        region = self.instance_config.region_for(self.location)
+        squashfs_path = f'/home/ubuntu/lambda-fs-{region}/{squashfs_name}'
+        # 86038d3483f6: this is the id of the Docker Image ID I used to create the squashfs.
+        # TODO: Set BATCH_WORKER_IMAGE_ID in the instance config to this value.
+        # Note for future functionality: We need to replace the "worker image" manually in LL
+        # since this is outside of GCP. When we do this, we can also pass the image id to the
+        # batch worker container so that it knows which squashfs file to use.
+        mount_path = '/host/rootfs/86038d3483f6'
+        mount_cmd = f'sudo mount {squashfs_path} {mount_path} -t squashfs -o loop'
+        commands = [
+            f'sudo mkdir -p {mount_path}',
+            mount_cmd,
+            f'sudo ls -la {mount_path}',
+        ]
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(hostname=self.ip_address, username='ubuntu', pkey=private_key)
+        for cmd in commands:
+            stdin, stdout, stderr = ssh.exec_command(cmd)
+            print(stdout.read().decode())
+            print(stderr.read().decode())
+        ssh.close()
+
     @property
     def failed_request_count(self):
         return self._failed_request_count

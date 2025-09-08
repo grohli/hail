@@ -40,6 +40,18 @@ attrs==25.3.0
     #   -c batch/../hail/python/pinned-requirements.txt
     #   -c batch/../web_common/pinned-requirements.txt
     #   aiohttp
+bcrypt==4.3.0
+    # via paramiko
+cffi==1.17.1
+    # via
+    #   -c batch/../hail/python/dev/pinned-requirements.txt
+    #   -c batch/../hail/python/pinned-requirements.txt
+    #   cryptography
+    #   pynacl
+cryptography==43.0.3
+    # via
+    #   -c batch/../hail/python/pinned-requirements.txt
+    #   paramiko
 dictdiffer==0.9.0
     # via -r batch/requirements.txt
 frozenlist==1.7.0
@@ -57,6 +69,8 @@ idna==3.10
     #   -c batch/../hail/python/pinned-requirements.txt
     #   -c batch/../web_common/pinned-requirements.txt
     #   yarl
+invoke==2.2.0
+    # via paramiko
 multidict==6.6.4
     # via
     #   -c batch/../gear/pinned-requirements.txt
@@ -79,6 +93,8 @@ pandas==2.3.2
     # via
     #   -c batch/../hail/python/pinned-requirements.txt
     #   -r batch/requirements.txt
+paramiko==4.0.0
+    # via -r batch/requirements.txt
 plotly==5.24.1
     # via
     #   -c batch/../hail/python/pinned-requirements.txt
@@ -91,6 +107,13 @@ propcache==0.3.2
     #   -c batch/../web_common/pinned-requirements.txt
     #   aiohttp
     #   yarl
+pycparser==2.22
+    # via
+    #   -c batch/../hail/python/dev/pinned-requirements.txt
+    #   -c batch/../hail/python/pinned-requirements.txt
+    #   cffi
+pynacl==1.5.0
+    # via paramiko
 python-dateutil==2.9.0.post0
     # via
     #   -c batch/../gear/pinned-requirements.txt
@@ -118,11 +141,13 @@ typing-extensions==4.15.0
     #   -c batch/../hail/python/pinned-requirements.txt
     #   -c batch/../web_common/pinned-requirements.txt
     #   aiosignal
+    #   aiosignal
     #   multidict
 tzdata==2025.2
     # via
     #   -c batch/../hail/python/pinned-requirements.txt
     #   pandas
+yarl==1.20.1
 yarl==1.20.1
     # via
     #   -c batch/../gear/pinned-requirements.txt

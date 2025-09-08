@@ -1,6 +1,7 @@
 import asyncio
 import collections
 import logging
+import os
 import re
 import secrets
 from typing import Any, Counter, Dict, List, Optional, Tuple
@@ -10,7 +11,7 @@ import sortedcontainers
 from gear import Database
 from gear.time_limited_max_size_cache import TimeLimitedMaxSizeCache
 from hailtop import aiotools
-from hailtop.utils import periodically_call, secret_alnum_string, time_msecs
+from hailtop.utils import periodically_call, retry_transient_errors, secret_alnum_string, time_msecs
 
 from ...globals import INSTANCE_VERSION, live_instance_states
 from ...instance_config import QuantifiedResource
@@ -335,6 +336,32 @@ class InstanceCollection:
         self.name_instance[instance.name] = instance
         self.adjust_for_add_instance(instance)
 
+    async def _get_lambda_ip_address(self, instance: Instance):
+        # spec = 'lambda'
+        API_KEY = os.environ['LAMBDA_API_KEY']
+        BASE_URL = 'https://cloud.lambdalabs.com/api/v1/'
+
+        instance_id = instance.instance_config.instance_id
+        url = f'{BASE_URL}instances/{instance_id}'
+        payload = {
+            "id": instance_id,
+        }
+        try:
+            instance_info = await retry_transient_errors(
+                self.resource_manager.client_session.get_read_json,
+                url,
+                headers={'Authorization': f'Bearer {API_KEY}'},
+                json=payload,
+            )
+            ip = instance_info['data']['ip']
+            log.info(f'LambdaVM instance {instance_id} IP address from instance info: {ip}')
+            instance.ip_address = ip
+            log.info(f'LambdaVM instance {instance_id} IP address from ip_address field in instance: {ip}')
+            return ip
+        except Exception as e:
+            log.error(f'Error getting lambda IP address: {e}')
+            raise e
+
     async def _set_up_lambda_vm(self, instance: Instance):
         """
         Placeholder function called once when a Lambda Labs VM first becomes active.
@@ -344,6 +371,13 @@ class InstanceCollection:
         try:
             before_setup = getattr(instance, '_lambda_setup_completed', False)
             log.info(f'LambdaVM {instance.name} _lambda_setup_completed before setup: {before_setup}')
+
+            lambda_ip_addr = await self._get_lambda_ip_address(instance)
+
+            await instance.activate(lambda_ip_addr, time_msecs())
+            await instance.mount_squashfs()
+            # await instance.start_batch_worker()
+
             instance._lambda_setup_completed = True
             log.info(f'LambdaVM {instance.name} setup completed: {instance._lambda_setup_completed}')
         except Exception as e:
