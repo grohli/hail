@@ -395,7 +395,7 @@ journalctl -u docker.service > dockerd.log
         'tags': {'items': ["batch2-agent"]},
         # Note: secureBoot is problematic for GPU jobs because nvidia drivers aren't presigned and therefore won't load
         'shieldedInstanceConfig': {
-            'enableSecureBoot': not is_gpu and not machine_type_to_gpu(machine_type_full),
+            'enableSecureBoot': True,  # not is_gpu and not machine_type_to_gpu(machine_type_full),
             'enableVtpm': True,
             'enableIntegrityMonitoring': True,
         },

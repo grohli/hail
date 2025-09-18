@@ -58,9 +58,20 @@ apt-get install -y g++-12
 update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 50
 update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 50
 
+# Nvidia driver module signing:
+# https://download.nvidia.com/XFree86/Linux-aarch64/535.183.01/README/installdriver.html#modulesigning
+# Key generation
+# https://docs.openssl.org/3.3/man1/openssl-req/
+mkdir -p /etc/nvidia/
+openssl req -new -x509 -newkey rsa:4096 -sha256 -days 365 -noenc -out /etc/nvidia/signing.x509 -keyout /etc/nvidia/signing.key
+
 wget --no-verbose https://us.download.nvidia.com/XFree86/Linux-x86_64/535.183.01/NVIDIA-Linux-x86_64-535.183.01.run
 chmod +x NVIDIA-Linux-x86_64-535.183.01.run
-./NVIDIA-Linux-x86_64-535.183.01.run --silent
+./NVIDIA-Linux-x86_64-535.183.01.run --silent \
+  --module-signing-secret-key=/etc/nvidia/signing.key \
+  --module-signing-public-key=/etc/nvidia/signing.x509
+  # --module-signing-secret-key \
+  # --module-signing-public-key
 
 apt-get --yes install nvidia-container-toolkit
 nvidia-ctk runtime configure --runtime=docker
