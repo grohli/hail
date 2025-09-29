@@ -42,7 +42,7 @@ attrs==25.3.0
     #   aiohttp
 bcrypt==4.3.0
     # via paramiko
-cffi==1.17.1
+cffi==2.0.0
     # via
     #   -c batch/../hail/python/dev/pinned-requirements.txt
     #   -c batch/../hail/python/pinned-requirements.txt
