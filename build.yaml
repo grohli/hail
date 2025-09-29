@@ -320,19 +320,19 @@ steps:
           echo "Running: LATEST_TIME=\$(echo \"\$SECRET_JSON\" | jq -r '.metadata.managedFields[] | .time' | sort -r | head -n1)"
           LATEST_TIME=$(echo "$SECRET_JSON" | jq -r '.metadata.managedFields[] | .time' | sort -r | head -n1)
           set -x
-          
+
           echo "Latest secret modification time: $LATEST_TIME"
-          
+
           # Convert to timestamp and check if over 1 year old (365 days)
           TIMESTAMP=$(date -d "$LATEST_TIME" +%s 2>/dev/null || echo "0")
           CURRENT_TIME=$(date +%s)
           AGE_DAYS=$(( (CURRENT_TIME - TIMESTAMP) / 86400 ))
-          
+
           echo "Secret age: $AGE_DAYS days"
-          
+
           if [ "$AGE_DAYS" -gt 365 ]; then
               echo "Secret is over 1 year old, regenerating certificates while preserving password..."
-              
+
               # Turn off set -x to avoid logging password:
               set +x
               echo "Running: EXISTING_PASSWORD=\$(echo \"\$SECRET_JSON\" | jq -r '.data[\"db-root-password\"]' | base64 -d)"
@@ -2460,7 +2460,7 @@ steps:
         script: /io/sql/116-finalize-job-groups.sql
         online: true
       - name: fix-mark-job-complete-deadlocks
-        script: /io/sql/fix-mark-job-complete-deadlocks.sql
+        script: /io/sql/117-fix-mark-job-complete-deadlocks.sql
         online: true
       - name: jobs-add-n-max-attempts
         script: /io/sql/118-jobs-add-n-max-attempts.sql

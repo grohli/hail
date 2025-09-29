@@ -141,13 +141,11 @@ typing-extensions==4.15.0
     #   -c batch/../hail/python/pinned-requirements.txt
     #   -c batch/../web_common/pinned-requirements.txt
     #   aiosignal
-    #   aiosignal
     #   multidict
 tzdata==2025.2
     # via
     #   -c batch/../hail/python/pinned-requirements.txt
     #   pandas
-yarl==1.20.1
 yarl==1.20.1
     # via
     #   -c batch/../gear/pinned-requirements.txt
