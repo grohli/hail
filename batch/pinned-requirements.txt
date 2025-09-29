@@ -48,7 +48,7 @@ cffi==2.0.0
     #   -c batch/../hail/python/pinned-requirements.txt
     #   cryptography
     #   pynacl
-cryptography==43.0.3
+cryptography==45.0.7
     # via
     #   -c batch/../hail/python/pinned-requirements.txt
     #   paramiko
