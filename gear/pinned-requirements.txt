@@ -62,7 +62,7 @@ frozenlist==1.7.0
     #   aiosignal
 google-api-core==2.25.1
     # via google-api-python-client
-google-api-python-client==2.181.0
+google-api-python-client==2.183.0
     # via google-cloud-profiler
 google-auth==2.40.3
     # via
@@ -102,7 +102,7 @@ multidict==6.6.4
     #   yarl
 prometheus-async==19.2.0
     # via -r gear/requirements.txt
-prometheus-client==0.22.1
+prometheus-client==0.23.1
     # via
     #   -c gear/../hail/python/dev/pinned-requirements.txt
     #   -r gear/requirements.txt
@@ -137,7 +137,7 @@ pymysql==1.1.2
     # via
     #   -r gear/requirements.txt
     #   aiomysql
-pyparsing==3.2.4
+pyparsing==3.2.5
     # via
     #   -c gear/../hail/python/dev/pinned-requirements.txt
     #   httplib2
@@ -147,7 +147,7 @@ python-dateutil==2.9.0.post0
     #   -c gear/../hail/python/hailtop/pinned-requirements.txt
     #   -c gear/../hail/python/pinned-requirements.txt
     #   kubernetes-asyncio
-pyyaml==6.0.2
+pyyaml==6.0.3
     # via
     #   -c gear/../hail/python/dev/pinned-requirements.txt
     #   -c gear/../hail/python/hailtop/pinned-requirements.txt

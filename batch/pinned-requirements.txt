@@ -40,7 +40,7 @@ attrs==25.3.0
     #   -c batch/../hail/python/pinned-requirements.txt
     #   -c batch/../web_common/pinned-requirements.txt
     #   aiohttp
-bcrypt==4.3.0
+bcrypt==5.0.0
     # via paramiko
 cffi==2.0.0
     # via
@@ -48,7 +48,7 @@ cffi==2.0.0
     #   -c batch/../hail/python/pinned-requirements.txt
     #   cryptography
     #   pynacl
-cryptography==45.0.7
+cryptography==46.0.1
     # via
     #   -c batch/../hail/python/pinned-requirements.txt
     #   paramiko
@@ -107,12 +107,12 @@ propcache==0.3.2
     #   -c batch/../web_common/pinned-requirements.txt
     #   aiohttp
     #   yarl
-pycparser==2.22
+pycparser==2.23
     # via
     #   -c batch/../hail/python/dev/pinned-requirements.txt
     #   -c batch/../hail/python/pinned-requirements.txt
     #   cffi
-pynacl==1.5.0
+pynacl==1.6.0
     # via paramiko
 python-dateutil==2.9.0.post0
     # via
@@ -141,6 +141,7 @@ typing-extensions==4.15.0
     #   -c batch/../hail/python/pinned-requirements.txt
     #   -c batch/../web_common/pinned-requirements.txt
     #   aiosignal
+    #   cryptography
     #   multidict
 tzdata==2025.2
     # via
