@@ -118,7 +118,7 @@ sudo docker run \\
 -e INTERNET_INTERFACE=eth0 \\
 -e UNRESERVED_WORKER_DATA_DISK_SIZE_GB=5 \\
 -e ACCEPTABLE_QUERY_JAR_URL_PREFIX={ACCEPTABLE_QUERY_JAR_URL_PREFIX} \\
--e INTERNAL_GATEWAY_IP={INTERNAL_GATEWAY_IP} \\
+-e INTERNAL_GATEWAY_IP=35.188.91.25 \\
 -v /var/run/docker.sock:/var/run/docker.sock \\
 -v /var/run/netns:/var/run/netns:shared \\
 -v /usr/bin/docker:/usr/bin/docker \\
