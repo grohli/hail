@@ -5,6 +5,7 @@ import secrets
 from typing import Dict, Optional
 
 import aiohttp
+import paramiko
 
 from gear import CommonAiohttpAppKeys, Database, transaction
 from hailtop.humanizex import naturaldelta_msec
@@ -275,8 +276,6 @@ VALUES (%s, %s);
         # THIS IS A PLACEHOLDER.
         # REVISIT THIS AND COMPLETE WHEN YOU'VE GOTTEN A PATHOLOGICALLY SIMPLE SCRIPT WORKING.
         # TEST THIS FUNCTIONALITY MANUALLY ON A SEPARATE VM FIRST.
-        import paramiko  # Import only when needed to avoid Docker image dependency (put this at top of script once debugging is done)
-
         log.info(f'LambdaVM {self.name}: IP address: {self.ip_address}')
         with open('/lambda-ssh-key/lambda-ssh-key', 'r') as key_file:
             private_key = paramiko.RSAKey.from_private_key(key_file)
