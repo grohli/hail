@@ -142,7 +142,7 @@ NAMESPACE = os.environ['NAMESPACE']
 IP_ADDRESS = os.environ['IP_ADDRESS']
 INTERNAL_GATEWAY_IP = os.environ['INTERNAL_GATEWAY_IP']
 if CLOUD == 'lambda':
-    INTERNAL_GATEWAY_IP = '35.188.91.25'
+    INTERNAL_GATEWAY_IP = '35.188.91.25'  # batch.hail.is
 BATCH_LOGS_STORAGE_URI = os.environ['BATCH_LOGS_STORAGE_URI']
 INSTANCE_ID = os.environ['INSTANCE_ID']
 REGION = os.environ['REGION']
