@@ -278,6 +278,7 @@ SET instance_config = %s WHERE name = %s;
 
             instance_id = response_data['data']['instance_ids'][0]
             instance_config.instance_id = instance_id
+            instance_config.location = avail_region
             new_instance_config = base64.b64encode(json.dumps(instance_config.to_dict()).encode()).decode()
             log.info(f'created Lambda Labs machine {machine_name} with instance id {instance_id}')
             await self.update_lambda_vm_instance_id(machine_name, new_instance_config)

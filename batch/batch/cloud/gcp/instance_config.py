@@ -1,12 +1,13 @@
-from typing import List, Union, Optional
 import logging
+from typing import List, Optional, Union
+
 from ...driver.billing_manager import ProductVersions
 from ...instance_config import InstanceConfig
 from .resource_utils import (
     gcp_machine_type_to_parts,
+    lambda_machine_type_to_parts,
     machine_type_to_gpu,
     machine_type_to_gpu_num,
-    lambda_machine_type_to_parts
 )
 from .resources import (
     GCPAcceleratorResource,
@@ -158,7 +159,8 @@ class GCPSlimInstanceConfig(InstanceConfig):
             'job_private': self.job_private,
             'resources': [resource.to_dict() for resource in self.resources],
         }
-    
+
+
 class LambdaSlimInstanceConfig(InstanceConfig):
     @staticmethod
     def create(
@@ -171,12 +173,10 @@ class LambdaSlimInstanceConfig(InstanceConfig):
     ) -> 'LambdaSlimInstanceConfig':  # pylint: disable=unused-argument
         machine_type_parts = lambda_machine_type_to_parts(machine_type)
         assert machine_type_parts is not None, machine_type
-        instance_family = machine_type_parts.machine_family
-        region='us-central1'
+        # instance_family = machine_type_parts.machine_family
+        region = 'us-central1'
 
-        resources = [
-            
-        ]
+        resources = []
 
         accelerator_family = machine_type_to_gpu(machine_type)
         assert accelerator_family
@@ -191,7 +191,8 @@ class LambdaSlimInstanceConfig(InstanceConfig):
             preemptible=preemptible,
             job_private=job_private,
             resources=resources,
-            instance_id=instance_id
+            instance_id=instance_id,
+            location=location,
         )
 
     def __init__(
@@ -200,7 +201,8 @@ class LambdaSlimInstanceConfig(InstanceConfig):
         preemptible: bool,
         job_private: bool,
         resources: List[GCPResource],
-        instance_id: str
+        instance_id: str,
+        location: str,
     ):
         self.cloud = 'lambda'
         self._machine_type = machine_type
@@ -215,6 +217,7 @@ class LambdaSlimInstanceConfig(InstanceConfig):
         self.cores = machine_type_parts.cores
         self.resources = resources
         self.instance_id = instance_id
+        self.location = location
 
     def worker_type(self) -> str:
         return self._worker_type
@@ -222,9 +225,10 @@ class LambdaSlimInstanceConfig(InstanceConfig):
     def instance_memory(self) -> int:
         return self.machine_type_parts.memory
 
-    def region_for(self, location: str) -> str:
-        # location = zone
-        return region_from_location(location)
+    def region_for(self, location: Optional[str]) -> str:
+        if self.location is not None:
+            return self.location
+        return location
 
     @staticmethod
     def from_dict(data: dict) -> 'LambdaSlimInstanceConfig':
@@ -238,11 +242,7 @@ class LambdaSlimInstanceConfig(InstanceConfig):
         resources = [gcp_resource_from_dict(data) for data in data['resources']]
 
         return LambdaSlimInstanceConfig(
-            machine_type,
-            preemptible,
-            job_private,
-            resources,
-            data.get('instance_id')
+            machine_type, preemptible, job_private, resources, data.get('instance_id'), data.get('location')
         )
 
     def to_dict(self) -> dict:
@@ -253,6 +253,6 @@ class LambdaSlimInstanceConfig(InstanceConfig):
             'preemptible': self.preemptible,
             'job_private': self.job_private,
             'resources': [resource.to_dict() for resource in self.resources],
-            'instance_id': self.instance_id
+            'instance_id': self.instance_id,
+            'location': self.location,
         }
-
