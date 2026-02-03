@@ -376,7 +376,8 @@ class InstanceCollection:
 
             await instance.activate(lambda_ip_addr, time_msecs())
             await instance.mount_squashfs()
-            # await instance.start_batch_worker()
+            await instance.prepare_chroot_environment()
+            await instance.start_batch_worker()
 
             instance._lambda_setup_completed = True
             log.info(f'LambdaVM {instance.name} setup completed: {instance._lambda_setup_completed}')
@@ -399,21 +400,51 @@ class InstanceCollection:
         data_disk_size_gb,
         boot_disk_size_gb,
     ) -> Tuple[Instance, List[QuantifiedResource]]:
+        # Compute setup context for Lambda instances
+        batch_logs_storage_uri = ''
+        batch_instance_id = 'test-lambda-instance'
+        max_idle_time_msecs_param = max_idle_time_msecs  # Use the parameter value, defaults should be 300000
+        unreserved_disk_size_gb_param = 10
+
+        if self.cloud == 'lambda':
+            from ...cloud.resource_utils import unreserved_worker_data_disk_size_gib
+
+            batch_logs_storage_uri = app['file_store'].batch_logs_storage_uri
+            batch_instance_id = app['file_store'].instance_id
+            unreserved_disk_size_gb_param = unreserved_worker_data_disk_size_gib(data_disk_size_gb, cores)
+
         location = self.choose_location(
             cores, local_ssd_data_disk, data_disk_size_gb, preemptible, regions, machine_type
         )
 
         machine_name = self.generate_machine_name()
         activation_token = secrets.token_urlsafe(32)
-        instance_config = self.resource_manager.instance_config(
-            machine_type=machine_type,
-            preemptible=preemptible,
-            local_ssd_data_disk=local_ssd_data_disk,
-            data_disk_size_gb=data_disk_size_gb,
-            boot_disk_size_gb=boot_disk_size_gb,
-            job_private=job_private,
-            location=location,
-        )
+
+        if self.cloud == 'lambda':
+            instance_config = self.resource_manager.instance_config(
+                machine_type=machine_type,
+                preemptible=preemptible,
+                local_ssd_data_disk=local_ssd_data_disk,
+                data_disk_size_gb=data_disk_size_gb,
+                boot_disk_size_gb=boot_disk_size_gb,
+                job_private=job_private,
+                location=location,
+                # Setup context values (only populated for Lambda)
+                batch_logs_storage_uri=batch_logs_storage_uri,
+                batch_instance_id=batch_instance_id,
+                max_idle_time_msecs=max_idle_time_msecs_param,
+                unreserved_disk_size_gb=unreserved_disk_size_gb_param,
+            )
+        else:
+            instance_config = self.resource_manager.instance_config(
+                machine_type=machine_type,
+                preemptible=preemptible,
+                local_ssd_data_disk=local_ssd_data_disk,
+                data_disk_size_gb=data_disk_size_gb,
+                boot_disk_size_gb=boot_disk_size_gb,
+                job_private=job_private,
+                location=location,
+            )
         instance = await Instance.create(
             app=app,
             inst_coll=self,

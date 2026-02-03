@@ -117,6 +117,7 @@ VALUES (%s, %s);
             machine_type,
             preemptible,
             instance_config,
+            activation_token=activation_token,
         )
 
     def __init__(
