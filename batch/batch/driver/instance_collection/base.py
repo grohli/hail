@@ -4,8 +4,10 @@ import logging
 import os
 import re
 import secrets
+from datetime import datetime
 from typing import Any, Counter, Dict, List, Optional, Tuple
 
+import paramiko
 import sortedcontainers
 
 from gear import Database
@@ -362,6 +364,128 @@ class InstanceCollection:
             log.error(f'Error getting lambda IP address: {e}')
             raise e
 
+    async def _lambda_setup_logging(self, instance: Instance, setup_succeeded: bool = True):
+        """
+        Capture diagnostic information to Lambda filesystem for debugging.
+
+        This runs after worker startup attempt and writes diagnostic files to
+        the Lambda filesystem which persists after VM deletion.
+
+        Args:
+            instance: The Lambda instance
+            setup_succeeded: True if called after successful setup, False if from exception handler
+        """
+        if self.cloud != 'lambda':
+            return
+
+        try:
+            log.info(f'Capturing diagnostic logs for Lambda VM {instance.name}')
+
+            region = instance.instance_config.region_for(instance.location)
+            timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+            log_dir = f'/home/ubuntu/lambda-fs-{region}/diagnostics/{timestamp}/{instance.name}'
+
+            # Setup: Create diagnostic directory and write run info
+            setup_commands = [
+                f'mkdir -p {log_dir}',
+                f'echo "{timestamp} - Setup {"succeeded" if setup_succeeded else "failed"}" > {log_dir}/diagnostic_run_info.txt',
+                f'echo "Instance: {instance.name}" >> {log_dir}/diagnostic_run_info.txt',
+                f'echo "IP: {instance.ip_address}" >> {log_dir}/diagnostic_run_info.txt',
+            ]
+
+            # Priority 1: Worker process state
+            worker_process_commands = [
+                f'ps aux | grep -E "batch.worker|python3" > {log_dir}/worker_processes.txt 2>&1 || echo "ps command failed" > {log_dir}/worker_processes.txt',
+                f'pgrep -fa batch.worker.worker > {log_dir}/worker_pid_details.txt 2>&1 || echo "No worker process found" > {log_dir}/worker_pid_details.txt',
+            ]
+
+            # Priority 2: Worker logs (most important)
+            worker_log_commands = [
+                f'cp /home/ubuntu/worker.log {log_dir}/worker.log 2>&1 || echo "Worker log not found" > {log_dir}/worker.log',
+                f'tail -200 /home/ubuntu/worker.log > {log_dir}/worker_log_tail.txt 2>&1 || echo "Worker log not found" > {log_dir}/worker_log_tail.txt',
+                f'grep -i "error\\|exception\\|failed\\|unauthorized" /home/ubuntu/worker.log > {log_dir}/worker_errors.txt 2>&1 || echo "No errors found or log missing" > {log_dir}/worker_errors.txt',
+            ]
+
+            # Priority 3: Network/Port status
+            network_commands = [
+                f'netstat -tuln | grep 5000 > {log_dir}/port_5000_status.txt 2>&1 || ss -tuln | grep 5000 > {log_dir}/port_5000_status.txt 2>&1 || echo "No listener on port 5000" > {log_dir}/port_5000_status.txt',
+                f'netstat -tuln > {log_dir}/all_listening_ports.txt 2>&1 || ss -tuln > {log_dir}/all_listening_ports.txt 2>&1',
+            ]
+
+            # Priority 4: Mount status
+            mount_commands = [
+                f'mount | grep /host/rootfs/86038d3483f6 > {log_dir}/chroot_mounts.txt 2>&1 || echo "No chroot mounts found" > {log_dir}/chroot_mounts.txt',
+            ]
+
+            # Mount verification (individual checks)
+            mount_check_script = """
+for mount_point in dev proc sys tmp run; do
+    if mount | grep -q "/host/rootfs/86038d3483f6/$mount_point"; then
+        echo "$mount_point: mounted"
+    else
+        echo "$mount_point: NOT mounted"
+    fi
+done
+if mount | grep -q "/host/rootfs/86038d3483f6/etc/resolv.conf"; then
+    echo "resolv.conf: mounted"
+else
+    echo "resolv.conf: NOT mounted"
+fi
+"""
+            mount_verification_cmd = f'bash -c \'{mount_check_script}\' > {log_dir}/mount_verification.txt 2>&1'
+
+            # Priority 5: Chroot environment validation
+            chroot_commands = [
+                f'chroot /host/rootfs/86038d3483f6 /bin/bash -c "echo Chroot execution works" > {log_dir}/chroot_test.txt 2>&1 || echo "Chroot execution failed" > {log_dir}/chroot_test.txt',
+                f'chroot /host/rootfs/86038d3483f6 /opt/venv/bin/python3 --version > {log_dir}/chroot_python_version.txt 2>&1 || echo "Python not available in chroot" > {log_dir}/chroot_python_version.txt',
+                f'chroot /host/rootfs/86038d3483f6 /opt/venv/bin/python3 -c "import batch.worker.worker; print(\'Module found\')" > {log_dir}/chroot_worker_module.txt 2>&1 || echo "Worker module not found or import failed" > {log_dir}/chroot_worker_module.txt',
+            ]
+
+            # Priority 6: System state
+            system_commands = [
+                f'uname -a > {log_dir}/system_info.txt 2>&1',
+                f'uptime > {log_dir}/uptime.txt 2>&1',
+                f'df -h > {log_dir}/disk_space.txt 2>&1',
+                f'free -h > {log_dir}/memory_status.txt 2>&1',
+                f'docker info > {log_dir}/docker_info.txt 2>&1 || echo "Docker not available or not running" > {log_dir}/docker_info.txt',
+            ]
+
+            # Combine all commands
+            all_commands = (
+                setup_commands
+                + worker_process_commands
+                + worker_log_commands
+                + network_commands
+                + mount_commands
+                + [mount_verification_cmd]
+                + chroot_commands
+                + system_commands
+            )
+
+            # Execute via SSH
+            with open('/lambda-ssh-key/lambda-ssh-key', 'r') as key_file:
+                private_key = paramiko.RSAKey.from_private_key(key_file)
+
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+            try:
+                ssh.connect(hostname=instance.ip_address, username='ubuntu', pkey=private_key)
+
+                # Execute all diagnostic commands
+                for cmd in all_commands:
+                    stdin, stdout, stderr = ssh.exec_command(cmd)
+                    stdout.channel.recv_exit_status()  # Wait for completion
+
+                log.info(f'Diagnostic logs captured to {log_dir} on Lambda filesystem')
+
+            finally:
+                ssh.close()
+
+        except Exception as e:
+            # Don't fail setup if logging fails
+            log.warning(f'Failed to capture diagnostic logs for {instance.name}: {e}')
+
     async def _set_up_lambda_vm(self, instance: Instance):
         """
         Placeholder function called once when a Lambda Labs VM first becomes active.
@@ -380,6 +504,7 @@ class InstanceCollection:
             await instance.start_batch_worker()
 
             instance._lambda_setup_completed = True
+            await self._lambda_setup_logging(instance, setup_succeeded=True)
             log.info(f'LambdaVM {instance.name} setup completed: {instance._lambda_setup_completed}')
         except Exception as e:
             log.error(f'Error executing startup script for Lambda VM {instance.name}: {e}')
@@ -404,14 +529,16 @@ class InstanceCollection:
         batch_logs_storage_uri = ''
         batch_instance_id = 'test-lambda-instance'
         max_idle_time_msecs_param = max_idle_time_msecs  # Use the parameter value, defaults should be 300000
-        unreserved_disk_size_gb_param = 10
+        unreserved_disk_size_gb_param = (
+            5000  # NOTE: THIS IS A LARGE NUMBER FOR TESTING, DO NOT LET THIS SLIDE IN PRODUCTION.
+        )
 
         if self.cloud == 'lambda':
-            from ...cloud.resource_utils import unreserved_worker_data_disk_size_gib
+            # from ...cloud.resource_utils import unreserved_worker_data_disk_size_gib
 
             batch_logs_storage_uri = app['file_store'].batch_logs_storage_uri
             batch_instance_id = app['file_store'].instance_id
-            unreserved_disk_size_gb_param = unreserved_worker_data_disk_size_gib(data_disk_size_gb, cores)
+            # unreserved_disk_size_gb_param = unreserved_worker_data_disk_size_gib(data_disk_size_gb, cores)
 
         location = self.choose_location(
             cores, local_ssd_data_disk, data_disk_size_gb, preemptible, regions, machine_type

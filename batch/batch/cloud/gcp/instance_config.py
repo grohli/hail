@@ -277,7 +277,7 @@ class LambdaSlimInstanceConfig(InstanceConfig):
     def to_dict(self) -> dict:
         return {
             'version': GCP_INSTANCE_CONFIG_VERSION,
-            'cloud': 'gcp',
+            'cloud': 'lambda',
             'machine_type': self._machine_type,
             'preemptible': self.preemptible,
             'job_private': self.job_private,

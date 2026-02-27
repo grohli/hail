@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import logging
@@ -19,6 +20,7 @@ from ..instance_config import InstanceConfig
 log = logging.getLogger('instance')
 
 LAMBDA_SQUASHFS_IMAGE_ID = '86038d3483f6'
+# LAMBDA_SQUASHFS_IMAGE_ID = 'fb0bf8f1f0bc'
 LAMBDA_CHROOT_PATH = f'/host/rootfs/{LAMBDA_SQUASHFS_IMAGE_ID}'
 
 
@@ -291,7 +293,8 @@ VALUES (%s, %s);
         log.info(f'LambdaVM {self.name}: IP address: {self.ip_address}')
         with open('/lambda-ssh-key/lambda-ssh-key', 'r') as key_file:
             private_key = paramiko.RSAKey.from_private_key(key_file)
-        squashfs_name = 'batch-worker-lambda.squashfs'
+        # squashfs_name = 'batch-worker-lambda.squashfs'
+        squashfs_name = 'batch-worker-lambda-v2.squashfs'
         region = self.instance_config.region_for(self.location)
         squashfs_path = f'/home/ubuntu/lambda-fs-{region}/{squashfs_name}'
         # 86038d3483f6: this is the id of the Docker Image ID I used to create the squashfs.
@@ -299,7 +302,8 @@ VALUES (%s, %s);
         # Note for future functionality: We need to replace the "worker image" manually in LL
         # since this is outside of GCP. When we do this, we can also pass the image id to the
         # batch worker container so that it knows which squashfs file to use.
-        mount_path = '/host/rootfs/86038d3483f6'
+        # mount_path = '/host/rootfs/86038d3483f6'
+        mount_path = f'/host/rootfs/{LAMBDA_SQUASHFS_IMAGE_ID}'
         mount_cmd = f'sudo mount {squashfs_path} {mount_path} -t squashfs -o loop'
         commands = [
             f'sudo mkdir -p {mount_path}',
@@ -347,14 +351,14 @@ VALUES (%s, %s);
         # Bind mounts required for the chroot to function
         bind_mount_commands = [
             # Special filesystems
-            f'sudo mount --bind /dev {chroot_path}/dev',
+            f'sudo mount --rbind /dev {chroot_path}/dev',
             f'sudo mount -t proc proc {chroot_path}/proc',
             f'sudo mount -t sysfs sys {chroot_path}/sys',
             f'sudo mount -t tmpfs tmpfs {chroot_path}/tmp',
             # Docker socket (via /run) - needed for job container management
-            f'sudo mount --bind /var/run {chroot_path}/run',
+            f'sudo mount --rbind /var/run {chroot_path}/run',
             # DNS resolution
-            f'sudo mount --bind /etc/resolv.conf {chroot_path}/etc/resolv.conf',
+            f'sudo mount --rbind /etc/resolv.conf {chroot_path}/etc/resolv.conf',
         ]
 
         with open('/lambda-ssh-key/lambda-ssh-key', 'r') as key_file:
@@ -399,10 +403,11 @@ VALUES (%s, %s);
         # Gather environment variables
         env_vars = await self._build_worker_env_vars()
 
-        # Build the chroot command with inline exports
-        chroot_command = self._build_chroot_command(env_vars)
+        # Build the inner script content (exports + worker start)
+        script_content = self._build_worker_script(env_vars)
 
-        await self._execute_worker_start(chroot_command)
+        # Write script to VM and execute it with sudo (avoids sudo/nohup issues)
+        await self._execute_worker_start(script_content)
 
     async def _build_worker_env_vars(self) -> Dict[str, str]:
         """Gather all environment variables needed by the worker."""
@@ -425,6 +430,9 @@ VALUES (%s, %s);
 
         return {
             'CLOUD': 'lambda',
+            'PROJECT': os.environ.get('PROJECT', 'hail-vdc'),
+            # 'ZONE': os.environ.get('ZONE', 'us-east-1-b'),
+            'ZONE': f'projects/hail-vdc/zones/{self.instance_config.region_for(self.location)}-b',
             'CORES': str(ic.cores),
             'NAME': self.name,
             'NAMESPACE': DEFAULT_NAMESPACE,
@@ -444,23 +452,21 @@ VALUES (%s, %s);
             'INTERNAL_GATEWAY_IP': INTERNAL_GATEWAY_IP,
         }
 
-    def _build_chroot_command(self, env_vars: Dict[str, str]) -> str:
+    def _build_worker_script(self, env_vars: Dict[str, str]) -> str:
         """
-        Build the chroot command with inline environment variable exports.
+        Build the worker startup script content to run inside chroot.
 
-        The command structure is:
-            sudo chroot /host/rootfs/{IMAGE_ID} /bin/bash -c '
-                export VAR1=value1
-                export VAR2=value2
-                ...
-                export INTERNET_INTERFACE=$(...)
-                /opt/venv/bin/python3 -u -m batch.worker.worker
-            '
+        This script will be written to a file on the VM, then executed with sudo.
+        This avoids sudo/nohup interaction issues that cause 'effective uid is not 0' errors.
+
+        Returns the script content (not the full command to execute it).
         """
-        chroot_path = LAMBDA_CHROOT_PATH
-
         # Build export statements
         export_lines = []
+
+        # PATH must be set first to ensure Python can find modules
+        export_lines.append('export PATH=/opt/venv/bin:$PATH')
+
         for key, value in env_vars.items():
             # Use shlex.quote to safely escape values
             export_lines.append(f'export {key}={shlex.quote(value)}')
@@ -470,29 +476,27 @@ VALUES (%s, %s);
             "export INTERNET_INTERFACE=$(ip link list | grep -E 'en[sop]|eth' | head -1 | awk -F': ' '{print $2}')"
         )
 
-        # Build the inner script
+        # Build the worker process commands
         worker_process_commands = [
             '',
             '# Start the worker process',
             'cd /batch 2>/dev/null || cd /',
             'exec /opt/venv/bin/python3 -u -m batch.worker.worker',
         ]
-        inner_script_lines = [*export_lines, *worker_process_commands]
-        inner_script = '\n'.join(inner_script_lines)
 
-        # Build the full chroot command
-        # Using nohup and background to detach from SSH session
-        chroot_cmd = f"sudo chroot {chroot_path} /bin/bash -c '{inner_script}'"
+        script_lines = [*export_lines, *worker_process_commands]
+        script_content = '\n'.join(script_lines)
 
-        # Wrap in nohup for background execution with logging
-        full_command = f"nohup {chroot_cmd} > /home/ubuntu/worker.log 2>&1 &"
+        return script_content
 
-        return full_command
+    async def _execute_worker_start(self, script_content: str):
+        """
+        Execute the worker start script via SSH.
 
-    async def _execute_worker_start(self, command: str):
-        """Execute the worker start command via SSH."""
+        This writes the script to a file on the VM, then executes it with sudo.
+        This avoids sudo/nohup interaction issues.
+        """
         log.info(f'Executing worker start on Lambda VM {self.name} at {self.ip_address}')
-        log.debug(f'Command: {command}')
 
         with open('/lambda-ssh-key/lambda-ssh-key', 'r') as key_file:
             private_key = paramiko.RSAKey.from_private_key(key_file)
@@ -500,16 +504,56 @@ VALUES (%s, %s);
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
+        chroot_path = LAMBDA_CHROOT_PATH
+
         try:
             ssh.connect(hostname=self.ip_address, username='ubuntu', pkey=private_key)
 
-            stdin, stdout, stderr = ssh.exec_command(command)
+            # Step 1: Write the script to a temporary file on the VM
+            script_path = '/tmp/start_worker.sh'
 
-            # Don't wait for completion since it's backgrounded
-            # Small delay to let the process start
-            import asyncio
+            # Use a heredoc to write the script content
+            write_script_cmd = f"""cat > {script_path} <<'SCRIPTEOF'
+#!/bin/bash
+{script_content}
+SCRIPTEOF"""
 
-            await asyncio.sleep(2)
+            log.debug(f'Writing worker script to {script_path}')
+            stdin, stdout, stderr = ssh.exec_command(write_script_cmd)
+            exit_status = stdout.channel.recv_exit_status()
+            if exit_status != 0:
+                error_output = stderr.read().decode()
+                raise RuntimeError(f'Failed to write worker script: {error_output}')
+
+            # Step 2: Make the script executable
+            stdin, stdout, stderr = ssh.exec_command(f'chmod +x {script_path}')
+            stdout.channel.recv_exit_status()
+
+            # Step 3: Execute the script with sudo inside chroot, backgrounded with output to log
+            # Wrap the chroot execution in a subshell to properly background it
+            exec_cmd = f'sudo bash -c "chroot {chroot_path} /bin/bash < {script_path} > /home/ubuntu/worker.log 2>&1 &"'
+
+            log.debug(f'Executing worker script: {exec_cmd}')
+            stdin, stdout, stderr = ssh.exec_command(exec_cmd)
+            exit_status = stdout.channel.recv_exit_status()
+
+            if exit_status != 0:
+                error_output = stderr.read().decode()
+                log.error(f'Failed to execute worker script: {error_output}')
+                raise RuntimeError(f'Failed to execute worker script: {error_output}')
+
+            for attempt in range(120):
+                try:
+                    stdin, stdout, stderr = ssh.exec_command('curl -s http://localhost:5000/healthcheck')
+                    output = stdout.read().decode().strip()
+                    if 'OK' in output or output:  # Healthcheck responded
+                        log.info(f'Worker healthy on {self.name} after {attempt + 1} seconds')
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(1)
+            else:
+                log.warning(f'Worker on {self.name} did not respond to healthcheck within 120 seconds')
 
             # Verify the process started
             stdin, stdout, stderr = ssh.exec_command('pgrep -f "batch.worker.worker" || echo "NOT_RUNNING"')
@@ -517,9 +561,11 @@ VALUES (%s, %s);
 
             if output == 'NOT_RUNNING':
                 # Check the log for errors
-                stdin, stdout, stderr = ssh.exec_command('tail -50 /home/ubuntu/worker.log')
+                stdin, stdout, stderr = ssh.exec_command(
+                    'tail -50 /home/ubuntu/worker.log 2>&1 || cat /home/ubuntu/nohup.out 2>&1'
+                )
                 log_output = stdout.read().decode()
-                log.error(f'LAMBDA DEBUG: Worker process failed to start. Log output:\n{log_output}')
+                log.error(f'Worker process failed to start. Log output:\n{log_output}')
                 raise RuntimeError(f'Worker process failed to start on {self.name}')
 
             log.info(f'Worker process started successfully on {self.name} with PID(s): {output}')
