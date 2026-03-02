@@ -85,7 +85,6 @@ class GCPWorkerAPI(CloudWorkerAPI):
         return create_app(aiogoogle.GoogleServiceAccountCredentials(key), self._metadata_server_client)
 
     def instance_config_from_config_dict(self, config_dict: Dict[str, str]) -> InstanceConfig:
-        # log.info(f'LAMBDA DEBUG - config_dict: {config_dict}')
         if config_dict['cloud'] == 'lambda':
             return LambdaSlimInstanceConfig.from_dict(config_dict)
         return GCPSlimInstanceConfig.from_dict(config_dict)
