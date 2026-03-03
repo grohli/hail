@@ -92,9 +92,11 @@ class LambdaResourceManager(CloudResourceManager):
                 # assert last_start_timestamp_msecs is not None
                 last_start_timestamp_msecs = instance.time_created
                 return VMStateRunning(spec, last_start_timestamp_msecs)
-            if state in ('terminating', 'terminated'):
+            if state == 'terminating':
                 return VMStateTerminated(spec)
-            log.exception(f'Unknown gce state {state} for {instance}')
+            if state == 'terminated':
+                return VMDoesNotExist()
+            log.exception(f'Unknown lambda state {state} for {instance}')
             return UnknownVMState(spec)
         except aiohttp.ClientResponseError as e:
             if e.status == 404:

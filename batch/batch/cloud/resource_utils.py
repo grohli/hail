@@ -32,28 +32,28 @@ def round_up_division(numerator: int, denominator: int) -> int:
 def possible_cores_from_worker_type(cloud: str, worker_type: str) -> List[int]:
     if cloud == 'azure':
         return azure_valid_cores_from_worker_type[worker_type]
-    assert cloud == 'gcp'
+    assert cloud in ('gcp', 'lambda')
     return gcp_valid_cores_for_pool_worker_type[worker_type]
 
 
 def valid_machine_types(cloud: str) -> List[str]:
     if cloud == 'azure':
         return azure_valid_machine_types
-    assert cloud == 'gcp' or cloud == 'lambda'
+    assert cloud in ('gcp', 'lambda')
     return gcp_valid_machine_types
 
 
 def memory_to_worker_type(cloud: str) -> Dict[str, str]:
     if cloud == 'azure':
         return azure_memory_to_worker_type
-    assert cloud == 'gcp'or cloud == 'lambda'
+    assert cloud in ('gcp', 'lambda')
     return gcp_memory_to_worker_type
 
 
 def machine_type_to_cores_and_memory_bytes(cloud: str, machine_type: str) -> Tuple[int, int]:
     if cloud == 'azure':
         return azure_machine_type_to_cores_and_memory_bytes(machine_type)
-    assert cloud == 'gcp'or cloud == 'lambda'
+    assert cloud in ('gcp', 'lambda')
     return gcp_machine_type_to_cores_and_memory_bytes(machine_type)
 
 
@@ -69,7 +69,7 @@ def requested_storage_bytes_to_actual_storage_gib(
     if cloud == 'azure':
         actual_storage_bytes = azure_requested_to_actual_storage_bytes(storage_bytes, allow_zero_storage)
     else:
-        assert cloud == 'gcp' or cloud == 'lambda'
+        assert cloud in ('gcp', 'lambda'), cloud
         actual_storage_bytes = gcp_requested_to_actual_storage_bytes(storage_bytes, allow_zero_storage)
 
     if actual_storage_bytes is None:
@@ -107,12 +107,12 @@ def is_valid_cores_mcpu(cores_mcpu: int) -> bool:
 def is_valid_storage_request(cloud: str, storage_in_gib: int) -> bool:
     if cloud == 'azure':
         return azure_is_valid_storage_request(storage_in_gib)
-    assert cloud == 'gcp' or cloud == 'lambda'
+    assert cloud in ('gcp', 'lambda')
     return gcp_is_valid_storage_request(storage_in_gib)
 
 
 def local_ssd_size(cloud: str, worker_type: str, cores: int) -> int:
     if cloud == 'azure':
         return azure_local_ssd_size(worker_type, cores)
-    assert cloud == 'gcp' or cloud == 'lambda', cloud
+    assert cloud in ('gcp', 'lambda'), cloud
     return gcp_local_ssd_size()
