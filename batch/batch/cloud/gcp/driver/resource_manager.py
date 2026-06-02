@@ -83,7 +83,7 @@ class GCPResourceManager(CloudResourceManager):
         boot_disk_size_gb: int,
         job_private: bool,
         location: str,
-    ) -> GCPSlimInstanceConfig:
+    ):
         return GCPSlimInstanceConfig.create(
             self.billing_manager.product_versions,
             machine_type,

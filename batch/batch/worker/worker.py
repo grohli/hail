@@ -141,6 +141,8 @@ NAMESPACE = os.environ['NAMESPACE']
 # ACTIVATION_TOKEN
 IP_ADDRESS = os.environ['IP_ADDRESS']
 INTERNAL_GATEWAY_IP = os.environ['INTERNAL_GATEWAY_IP']
+if CLOUD == 'lambda':
+    INTERNAL_GATEWAY_IP = '35.188.91.25'  # batch.hail.is; we're using the public IP as "internal" for minimal modification to existing code.
 BATCH_LOGS_STORAGE_URI = os.environ['BATCH_LOGS_STORAGE_URI']
 INSTANCE_ID = os.environ['INSTANCE_ID']
 REGION = os.environ['REGION']
@@ -3556,7 +3558,7 @@ async def async_main():
     image_lock = aiorwlock.RWLock()
     docker = aiodocker.Docker()
 
-    if CLOUD == 'gcp':
+    if CLOUD in ('gcp', 'lambda'):
         CLOUD_WORKER_API = await GCPWorkerAPI.from_env()
     else:
         assert CLOUD == 'azure'

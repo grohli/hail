@@ -7,7 +7,7 @@ from hailtop.aiocloud.aiogoogle import GoogleStorageAsyncFS
 
 from ..instance_config import InstanceConfig
 from .azure.instance_config import AzureSlimInstanceConfig
-from .gcp.instance_config import GCPSlimInstanceConfig
+from .gcp.instance_config import GCPSlimInstanceConfig, LambdaSlimInstanceConfig
 from .terra.azure.instance_config import TerraAzureSlimInstanceConfig
 
 
@@ -17,6 +17,8 @@ def instance_config_from_config_dict(config: Dict[str, Any]) -> InstanceConfig:
         if os.environ.get('HAIL_TERRA'):
             return TerraAzureSlimInstanceConfig.from_dict(config)
         return AzureSlimInstanceConfig.from_dict(config)
+    if cloud == 'lambda':
+        return LambdaSlimInstanceConfig.from_dict(config)
     assert cloud == 'gcp'
     return GCPSlimInstanceConfig.from_dict(config)
 
@@ -39,6 +41,8 @@ def _acceptable_query_jar_url_prefix() -> str:
     assert jar_subfolder[0] == '/', (query_storage_uri, jar_subfolder)
     assert query_storage_uri[-1] != '/', (query_storage_uri, jar_subfolder)
 
+    if cloud == 'lambda':
+        return acceptable_query_jar_url_prefix
     if cloud == 'gcp':
         assert GoogleStorageAsyncFS.valid_url(acceptable_query_jar_url_prefix)
     else:

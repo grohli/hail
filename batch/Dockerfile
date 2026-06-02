@@ -6,6 +6,8 @@ RUN curl -sLO https://github.com/tailwindlabs/tailwindcss/releases/download/v3.4
     chmod +x tailwindcss-linux-x64 && \
     mv tailwindcss-linux-x64 /usr/bin/tailwindcss
 
+RUN hail-apt-get-install openssh-client
+
 COPY hail/python/hailtop/pinned-requirements.txt hailtop-requirements.txt
 COPY gear/pinned-requirements.txt gear-requirements.txt
 COPY web_common/pinned-requirements.txt web_common-requirements.txt

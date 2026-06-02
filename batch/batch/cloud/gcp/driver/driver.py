@@ -3,7 +3,7 @@ from typing import Dict
 
 from gear import Database
 from gear.cloud_config import get_gcp_config
-from hailtop import aiotools
+from hailtop import aiotools, httpx
 from hailtop.aiocloud import aiogoogle
 from hailtop.utils import RateLimit, periodically_call
 
@@ -14,6 +14,7 @@ from .activity_logs import process_activity_log_events_since
 from .billing_manager import GCPBillingManager
 from .disks import delete_orphaned_disks
 from .resource_manager import GCPResourceManager
+from .resource_manager_lambda import LambdaResourceManager
 from .zones import ZoneMonitor
 
 
@@ -65,6 +66,7 @@ ON DUPLICATE KEY UPDATE region = region;
         billing_manager = await GCPBillingManager.create(db, regions)
         inst_coll_manager = InstanceCollectionManager(db, machine_name_prefix, zone_monitor, region, regions)
         resource_manager = GCPResourceManager(project, compute_client, billing_manager)
+        resource_manager_lambda = LambdaResourceManager(db, billing_manager, httpx.client_session())
 
         task_manager = aiotools.BackgroundTaskManager()
 
@@ -82,20 +84,29 @@ ON DUPLICATE KEY UPDATE region = region;
             for config in inst_coll_configs.name_pool_config.values()
         ]
 
-        jpim, *_ = await asyncio.gather(
+        jpim_gcp, jpim_lambda, *_ = await asyncio.gather(
             JobPrivateInstanceManager.create(
                 app,
                 db,
                 inst_coll_manager,
                 resource_manager,
                 machine_name_prefix,
-                inst_coll_configs.jpim_config,
+                inst_coll_configs.jpim_config['gcp'],
+                task_manager,
+            ),
+            JobPrivateInstanceManager.create(
+                app,
+                db,
+                inst_coll_manager,
+                resource_manager_lambda,
+                machine_name_prefix,
+                inst_coll_configs.jpim_config['lambda'],
                 task_manager,
             ),
             *create_pools_coros,
         )
 
-        assert isinstance(jpim, JobPrivateInstanceManager)
+        assert isinstance(jpim_gcp, JobPrivateInstanceManager)
         driver = GCPDriver(
             db,
             machine_name_prefix,
@@ -105,7 +116,8 @@ ON DUPLICATE KEY UPDATE region = region;
             namespace,
             zone_monitor,
             inst_coll_manager,
-            jpim,
+            jpim_gcp,
+            jpim_lambda,
             billing_manager,
             task_manager,
         )
@@ -127,7 +139,8 @@ ON DUPLICATE KEY UPDATE region = region;
         namespace: str,
         zone_monitor: ZoneMonitor,
         inst_coll_manager: InstanceCollectionManager,
-        job_private_inst_manager: JobPrivateInstanceManager,
+        job_private_inst_manager_gcp: JobPrivateInstanceManager,
+        job_private_inst_manager_lambda: JobPrivateInstanceManager,
         billing_manager: GCPBillingManager,
         task_manager: aiotools.BackgroundTaskManager,
     ):
@@ -138,7 +151,8 @@ ON DUPLICATE KEY UPDATE region = region;
         self.project = project
         self.namespace = namespace
         self.zone_monitor = zone_monitor
-        self.job_private_inst_manager = job_private_inst_manager
+        self.job_private_inst_manager = job_private_inst_manager_gcp
+        self.job_private_inst_manager_lambda = job_private_inst_manager_lambda
         self._billing_manager = billing_manager
         self._inst_coll_manager = inst_coll_manager
         self._task_manager = task_manager

@@ -116,7 +116,7 @@ n1_highcpu_machines = {
     for cores in [2, 4, 8, 16, 32, 64, 96]
 }
 
-MACHINE_TYPE_TO_PARTS = {
+MACHINE_TYPE_TO_PARTS_GCP = {
     **n1_standard_t4_machines,
     **n1_highmem_t4_machines,
     **n1_highcpu_t4_machines,
@@ -244,19 +244,79 @@ MACHINE_TYPE_TO_PARTS = {
     ),
 }
 
+MACHINE_TYPE_TO_PARTS_LAMBDA = {
+    'gpu_8x_v100': MachineTypeParts(
+        cores=92,
+        memory=gib_to_bytes(460),
+        gpu_config=GPUConfig(num_gpus=8, gpu_type='l4'),
+        machine_family='v100',
+        worker_type='lambda',
+    ),
+    'gpu_1x_a10': MachineTypeParts(
+        cores=92,
+        memory=gib_to_bytes(460),
+        gpu_config=GPUConfig(num_gpus=1, gpu_type='l4'),
+        machine_family='a10',
+        worker_type='lambda',
+    ),
+    'gpu_1x_a100_sxm4': MachineTypeParts(
+        cores=30,
+        memory=gib_to_bytes(460),
+        gpu_config=GPUConfig(num_gpus=1, gpu_type='l4'),
+        machine_family='a100',
+        worker_type='lambda',
+    ),
+    'gpu_8x_a100': MachineTypeParts(
+        cores=124,
+        memory=gib_to_bytes(1800),
+        gpu_config=GPUConfig(num_gpus=8, gpu_type='l4'),
+        machine_family='a100',
+        worker_type='lambda',
+    ),
+    'gpu_1x_rtx6000': MachineTypeParts(
+        cores=92,
+        memory=gib_to_bytes(460),
+        gpu_config=GPUConfig(num_gpus=1, gpu_type='l4'),
+        machine_family='rtx6000',
+        worker_type='lambda',
+    ),
+    'gpu_2x_a6000': MachineTypeParts(
+        cores=92,
+        memory=gib_to_bytes(460),
+        gpu_config=GPUConfig(num_gpus=2, gpu_type='l4'),
+        machine_family='a6000',
+        worker_type='lambda',
+    ),
+    'gpu_1x_gh200': MachineTypeParts(
+        cores=64,
+        memory=gib_to_bytes(432),
+        gpu_config=GPUConfig(num_gpus=1, gpu_type='l4'),
+        machine_family='gh200',
+        worker_type='lambda',
+    ),
+}
+
+MACHINE_TYPE_TO_PARTS = {**MACHINE_TYPE_TO_PARTS_GCP, **MACHINE_TYPE_TO_PARTS_LAMBDA}
+
 gcp_valid_cores_for_pool_worker_type = {
     'highcpu': [2, 4, 8, 16, 32, 64, 96],
     'standard': [1, 2, 4, 8, 16, 32, 64, 96],
     'highmem': [2, 4, 8, 16, 32, 64, 96],
 }
 
+
 gcp_valid_machine_types = list(MACHINE_TYPE_TO_PARTS.keys())
+# lambda_valid_machine_types = list(MACHINE_TYPE_TO_PARTS_LAMBDA.keys())
 
 gcp_memory_to_worker_type = {'lowmem': 'highcpu', 'standard': 'standard', 'highmem': 'highmem'}
 
 
 def gcp_machine_type_to_parts(machine_type: str) -> Optional[MachineTypeParts]:
     return MACHINE_TYPE_TO_PARTS.get(machine_type)
+
+
+def lambda_machine_type_to_parts(machine_type: str) -> Optional[MachineTypeParts]:
+    return MACHINE_TYPE_TO_PARTS_LAMBDA.get(machine_type)
 
 
 def gcp_machine_type_to_cores_and_memory_bytes(machine_type: str) -> Tuple[int, int]:
@@ -296,7 +356,10 @@ def gcp_local_ssd_size() -> int:
 
 
 def machine_type_to_gpu(machine_type: str) -> Optional[str]:
-    machine_type_parts = MACHINE_TYPE_TO_PARTS.get(machine_type)
+    if machine_type.startswith('gpu_'):
+        machine_type_parts = MACHINE_TYPE_TO_PARTS_LAMBDA.get(machine_type)
+    else:
+        machine_type_parts = MACHINE_TYPE_TO_PARTS.get(machine_type)
     if (machine_type_parts is None) or (machine_type_parts.gpu_config is None):
         return None
     return machine_type_parts.gpu_config.gpu_type
@@ -307,8 +370,12 @@ def is_gpu(machine_family: str) -> bool:
 
 
 def machine_type_to_gpu_num(machine_type: str) -> int:
-    assert machine_type in MACHINE_TYPE_TO_PARTS
-    machine_type_parts = MACHINE_TYPE_TO_PARTS[machine_type]
+    if machine_type.startswith('gpu_'):
+        assert machine_type in MACHINE_TYPE_TO_PARTS_LAMBDA
+        machine_type_parts = MACHINE_TYPE_TO_PARTS_LAMBDA.get(machine_type)
+    else:
+        assert machine_type in MACHINE_TYPE_TO_PARTS
+        machine_type_parts = MACHINE_TYPE_TO_PARTS[machine_type]
     if machine_type_parts.gpu_config is None:
         return 0
     return machine_type_parts.gpu_config.num_gpus

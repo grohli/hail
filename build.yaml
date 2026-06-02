@@ -843,10 +843,10 @@ steps:
     script: |
       set -ex
       cd /io/
-      
+
       uv venv --python 3.11 --seed _venv
       source _venv/bin/activate
-      
+
       pip install /io/wheel/hail-*-py3-none-any.whl
       cat << EOF | python3
       import hail as hl
@@ -2496,6 +2496,9 @@ steps:
         online: true
       - name: add-dockerhub-proxy-flag
         script: /io/sql/120-add-dockerhub-proxy-flag.sql
+        online: true
+      - name: add-lambda-inst-col
+        script: /io/sql/add_lambda_inst_col.sql
         online: true
     inputs:
       - from: /repo/batch/sql
