@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import secrets
 import shlex
 from typing import Dict, Optional
@@ -18,10 +19,6 @@ from ..globals import INSTANCE_VERSION
 from ..instance_config import InstanceConfig
 
 log = logging.getLogger('instance')
-
-LAMBDA_SQUASHFS_IMAGE_ID = '86038d3483f6'
-# LAMBDA_SQUASHFS_IMAGE_ID = 'fb0bf8f1f0bc'
-LAMBDA_CHROOT_PATH = f'/host/rootfs/{LAMBDA_SQUASHFS_IMAGE_ID}'
 
 
 class Instance:
@@ -282,296 +279,158 @@ VALUES (%s, %s);
         self._free_cores_mcpu += delta_mcpu
         self.inst_coll.adjust_for_add_instance(self)
 
-    async def mount_squashfs(self):
-        """
-        Mount the squashfs on the Lambda VM.
-
-        This method must be called AFTER activate() and BEFORE prepare_chroot_environment().
-        Due to the startup times of Lambda VMs and the lack of startup scripts and custom images,
-        we need to mount the squashfs manually and after the VM is activated.
-        """
-        log.info(f'LambdaVM {self.name}: IP address: {self.ip_address}')
-        with open('/lambda-ssh-key/lambda-ssh-key', 'r') as key_file:
-            private_key = paramiko.RSAKey.from_private_key(key_file)
-        # squashfs_name = 'batch-worker-lambda.squashfs'
-        squashfs_name = 'batch-worker-lambda-v2.squashfs'
-        region = self.instance_config.region_for(self.location)
-        squashfs_path = f'/home/ubuntu/lambda-fs-{region}/{squashfs_name}'
-        # 86038d3483f6: this is the id of the Docker Image ID I used to create the squashfs.
-        # TODO: Set BATCH_WORKER_IMAGE_ID in the instance config to this value.
-        # Note for future functionality: We need to replace the "worker image" manually in LL
-        # since this is outside of GCP. When we do this, we can also pass the image id to the
-        # batch worker container so that it knows which squashfs file to use.
-        # mount_path = '/host/rootfs/86038d3483f6'
-        mount_path = f'/host/rootfs/{LAMBDA_SQUASHFS_IMAGE_ID}'
-        mount_cmd = f'sudo mount {squashfs_path} {mount_path} -t squashfs -o loop'
-        commands = [
-            f'sudo mkdir -p {mount_path}',
-            mount_cmd,
-            f'sudo ls -la {mount_path}',
-        ]
-
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(hostname=self.ip_address, username='ubuntu', pkey=private_key)
-        for cmd in commands:
-            stdin, stdout, stderr = ssh.exec_command(cmd)
-            print(stdout.read().decode())
-            print(stderr.read().decode())
-        ssh.close()
-
-    """
-    REGARDING THE FOLLOWING LAMBDA-SPECIFIC FUNCTIONS:
-    - prepare_chroot_environment()
-    - start_batch_worker()
-    - _build_worker_env_vars()
-    Please refer to the worker startup script passed to GCP workers in create_instance.py.
-    The commands executed/constructed in these functions are adapted from the GCP worker startup script.
-    Since Lambda Labs does not support startup scripts, we must manually call the following functions.
-    If there is an issue with the commands executed/constructed in these functions, please refer to the GCP worker startup script in create_instance.py.
-    """
-
-    async def prepare_chroot_environment(self):
-        """
-        Prepare the chroot environment by setting up necessary bind mounts.
-
-        This method must be called AFTER mount_squashfs() and BEFORE start_batch_worker().
-
-        The squashfs contains a full directory structure identical to what exists
-        after 'docker export' on a standard GCP worker. We bind mount essential
-        system directories to make the chroot functional.
-        """
-        if self.inst_coll.cloud != 'lambda':
-            raise ValueError('prepare_chroot_environment() only valid for lambda instances')
-
-        log.info(f'Preparing chroot environment for Lambda VM {self.name}')
-
-        chroot_path = LAMBDA_CHROOT_PATH
-
-        # Bind mounts required for the chroot to function
-        bind_mount_commands = [
-            # Special filesystems
-            f'sudo mount --rbind /dev {chroot_path}/dev',
-            f'sudo mount -t proc proc {chroot_path}/proc',
-            f'sudo mount -t sysfs sys {chroot_path}/sys',
-            f'sudo mount -t tmpfs tmpfs {chroot_path}/tmp',
-            # Docker socket (via /run) - needed for job container management
-            f'sudo mount --rbind /var/run {chroot_path}/run',
-            # DNS resolution
-            f'sudo mount --rbind /etc/resolv.conf {chroot_path}/etc/resolv.conf',
-        ]
-
-        with open('/lambda-ssh-key/lambda-ssh-key', 'r') as key_file:
-            private_key = paramiko.RSAKey.from_private_key(key_file)
-
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-        try:
-            ssh.connect(hostname=self.ip_address, username='ubuntu', pkey=private_key)
-
-            for cmd in bind_mount_commands:
-                log.info(f'Chroot environment mounting: Executing {cmd}...')
-                stdin, stdout, stderr = ssh.exec_command(cmd)
-                exit_status = stdout.channel.recv_exit_status()
-                if exit_status != 0:
-                    error_output = stderr.read().decode()
-                    log.error(f'Command failed with exit status {exit_status}: {error_output}')
-                    raise RuntimeError(f'Failed to execute: {cmd}')
-
-            log.info(f'LAMBDA DEBUG: Chroot environment prepared successfully for {self.name}')
-
-        except Exception as e:
-            log.error(f'LAMBDA DEBUG: Error preparing chroot environment for {self.name}: {e}')
-            raise e
-
-        finally:
-            ssh.close()
-
-    async def start_batch_worker(self):
-        """
-        Start the batch worker process on a Lambda Labs VM via SSH.
-
-        The worker runs inside a chroot environment using the mounted squashfs.
-        Environment variables are exported inline with the chroot command.
-        """
-        if self.inst_coll.cloud != 'lambda':
-            raise ValueError('start_batch_worker() only valid for lambda instances')
-
-        log.info(f'Starting batch worker on Lambda VM {self.name}')
-
-        # Gather environment variables
-        env_vars = await self._build_worker_env_vars()
-
-        # Build the inner script content (exports + worker start)
-        script_content = self._build_worker_script(env_vars)
-
-        # Write script to VM and execute it with sudo (avoids sudo/nohup issues)
-        await self._execute_worker_start(script_content)
-
-    async def _build_worker_env_vars(self) -> Dict[str, str]:
-        """Gather all environment variables needed by the worker."""
-        import os
-
+    async def _build_worker_env_vars(
+        self,
+        file_store,
+        max_idle_time_msecs: int,
+        unreserved_disk_size_gb: int,
+    ) -> Dict[str, str]:
+        """Mirror the GCP docker run env-var set, with CLOUD=lambda and a GCP-shaped ZONE."""
         from ..batch_configuration import DEFAULT_NAMESPACE, DOCKER_PREFIX, DOCKER_ROOT_IMAGE, INTERNAL_GATEWAY_IP
         from ..cloud.utils import ACCEPTABLE_QUERY_JAR_URL_PREFIX
 
-        # Get activation_token - should be cached on instance
         activation_token = self._activation_token
         if not activation_token:
-            # Fallback: query from database if not cached
             record = await self.db.select_and_fetchone(
                 'SELECT activation_token FROM instances WHERE name = %s', (self.name,)
             )
             activation_token = record['activation_token']
+        assert activation_token is not None
 
-        # Get values from instance_config (populated at creation)
+        assert self.ip_address is not None, f'ip_address must be set before calling _build_worker_env_vars on {self.name}'
+
         ic = self.instance_config
+        region = ic.region_for(self.location)
+        # Preserve the rsplit('/', 1)[1] parse in GCPWorkerAPI.from_env()
+        synthetic_zone = f'projects/hail-vdc/zones/{region}-b'
 
         return {
             'CLOUD': 'lambda',
             'PROJECT': os.environ.get('PROJECT', 'hail-vdc'),
-            # 'ZONE': os.environ.get('ZONE', 'us-east-1-b'),
-            'ZONE': f'projects/hail-vdc/zones/{self.instance_config.region_for(self.location)}-b',
+            'ZONE': synthetic_zone,
+            'REGION': region,
             'CORES': str(ic.cores),
             'NAME': self.name,
             'NAMESPACE': DEFAULT_NAMESPACE,
             'ACTIVATION_TOKEN': activation_token,
             'IP_ADDRESS': self.ip_address,
-            'BATCH_LOGS_STORAGE_URI': getattr(ic, 'batch_logs_storage_uri', ''),
-            'INSTANCE_ID': getattr(ic, 'batch_instance_id', 'test-lambda-instance'),
-            'REGION': self.region,
+            'BATCH_LOGS_STORAGE_URI': file_store.batch_logs_storage_uri,
+            'INSTANCE_ID': file_store.instance_id,
             'DOCKER_PREFIX': DOCKER_PREFIX,
             'DOCKER_ROOT_IMAGE': DOCKER_ROOT_IMAGE,
             'INSTANCE_CONFIG': base64.b64encode(json.dumps(ic.to_dict()).encode()).decode(),
-            'MAX_IDLE_TIME_MSECS': str(getattr(ic, 'max_idle_time_msecs', 300000)),
-            'BATCH_WORKER_IMAGE': os.environ.get('HAIL_BATCH_WORKER_IMAGE', ''),
-            'BATCH_WORKER_IMAGE_ID': LAMBDA_SQUASHFS_IMAGE_ID,
-            'UNRESERVED_WORKER_DATA_DISK_SIZE_GB': str(getattr(ic, 'unreserved_disk_size_gb', 10)),
+            'MAX_IDLE_TIME_MSECS': str(max_idle_time_msecs),
+            'BATCH_WORKER_IMAGE': os.environ['HAIL_BATCH_WORKER_IMAGE'],
+            'UNRESERVED_WORKER_DATA_DISK_SIZE_GB': str(unreserved_disk_size_gb),
             'ACCEPTABLE_QUERY_JAR_URL_PREFIX': ACCEPTABLE_QUERY_JAR_URL_PREFIX,
             'INTERNAL_GATEWAY_IP': INTERNAL_GATEWAY_IP,
+            'GOOGLE_APPLICATION_CREDENTIALS': '/gsa-key.json',
         }
 
-    def _build_worker_script(self, env_vars: Dict[str, str]) -> str:
-        """
-        Build the worker startup script content to run inside chroot.
+    async def transfer_credentials_and_configure_docker(self) -> None:
+        """SCP the GSA key to /home/ubuntu/gsa-key.json and configure host gcloud auth for Artifact Registry."""
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._scp_gsa_key_blocking)
+        await loop.run_in_executor(None, self._configure_docker_auth_blocking)
 
-        This script will be written to a file on the VM, then executed with sudo.
-        This avoids sudo/nohup interaction issues that cause 'effective uid is not 0' errors.
-
-        Returns the script content (not the full command to execute it).
-        """
-        # Build export statements
-        export_lines = []
-
-        # PATH must be set first to ensure Python can find modules
-        export_lines.append('export PATH=/opt/venv/bin:$PATH')
-
-        for key, value in env_vars.items():
-            # Use shlex.quote to safely escape values
-            export_lines.append(f'export {key}={shlex.quote(value)}')
-
-        # INTERNET_INTERFACE must be computed inside the chroot
-        export_lines.append(
-            "export INTERNET_INTERFACE=$(ip link list | grep -E 'en[sop]|eth' | head -1 | awk -F': ' '{print $2}')"
-        )
-
-        # Build the worker process commands
-        worker_process_commands = [
-            '',
-            '# Start the worker process',
-            'cd /batch 2>/dev/null || cd /',
-            'exec /opt/venv/bin/python3 -u -m batch.worker.worker',
-        ]
-
-        script_lines = [*export_lines, *worker_process_commands]
-        script_content = '\n'.join(script_lines)
-
-        return script_content
-
-    async def _execute_worker_start(self, script_content: str):
-        """
-        Execute the worker start script via SSH.
-
-        This writes the script to a file on the VM, then executes it with sudo.
-        This avoids sudo/nohup interaction issues.
-        """
-        log.info(f'Executing worker start on Lambda VM {self.name} at {self.ip_address}')
-
+    def _scp_gsa_key_blocking(self) -> None:
         with open('/lambda-ssh-key/lambda-ssh-key', 'r') as key_file:
             private_key = paramiko.RSAKey.from_private_key(key_file)
+        transport = paramiko.Transport((self.ip_address, 22))
+        transport.connect(username='ubuntu', pkey=private_key)
+        try:
+            sftp = paramiko.SFTPClient.from_transport(transport)
+            sftp.put('/lambda-gsa-key/key.json', '/home/ubuntu/gsa-key.json')
+            sftp.chmod('/home/ubuntu/gsa-key.json', 0o600)
+            sftp.close()
+        finally:
+            transport.close()
 
+    def _configure_docker_auth_blocking(self) -> None:
+        with open('/lambda-ssh-key/lambda-ssh-key', 'r') as key_file:
+            private_key = paramiko.RSAKey.from_private_key(key_file)
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-        chroot_path = LAMBDA_CHROOT_PATH
-
+        ssh.connect(hostname=self.ip_address, username='ubuntu', pkey=private_key)
         try:
-            ssh.connect(hostname=self.ip_address, username='ubuntu', pkey=private_key)
-
-            # Step 1: Write the script to a temporary file on the VM
-            script_path = '/tmp/start_worker.sh'
-
-            # Use a heredoc to write the script content
-            write_script_cmd = f"""cat > {script_path} <<'SCRIPTEOF'
-#!/bin/bash
-{script_content}
-SCRIPTEOF"""
-
-            log.debug(f'Writing worker script to {script_path}')
-            stdin, stdout, stderr = ssh.exec_command(write_script_cmd)
-            exit_status = stdout.channel.recv_exit_status()
-            if exit_status != 0:
-                error_output = stderr.read().decode()
-                raise RuntimeError(f'Failed to write worker script: {error_output}')
-
-            # Step 2: Make the script executable
-            stdin, stdout, stderr = ssh.exec_command(f'chmod +x {script_path}')
-            stdout.channel.recv_exit_status()
-
-            # Step 3: Execute the script with sudo inside chroot, backgrounded with output to log
-            # Wrap the chroot execution in a subshell to properly background it
-            exec_cmd = f'sudo bash -c "chroot {chroot_path} /bin/bash < {script_path} > /home/ubuntu/worker.log 2>&1 &"'
-
-            log.debug(f'Executing worker script: {exec_cmd}')
-            stdin, stdout, stderr = ssh.exec_command(exec_cmd)
-            exit_status = stdout.channel.recv_exit_status()
-
-            if exit_status != 0:
-                error_output = stderr.read().decode()
-                log.error(f'Failed to execute worker script: {error_output}')
-                raise RuntimeError(f'Failed to execute worker script: {error_output}')
-
-            for attempt in range(120):
-                try:
-                    stdin, stdout, stderr = ssh.exec_command('curl -s http://localhost:5000/healthcheck')
-                    output = stdout.read().decode().strip()
-                    if 'OK' in output or output:  # Healthcheck responded
-                        log.info(f'Worker healthy on {self.name} after {attempt + 1} seconds')
-                        break
-                except Exception:
-                    pass
-                await asyncio.sleep(1)
-            else:
-                log.warning(f'Worker on {self.name} did not respond to healthcheck within 120 seconds')
-
-            # Verify the process started
-            stdin, stdout, stderr = ssh.exec_command('pgrep -f "batch.worker.worker" || echo "NOT_RUNNING"')
-            output = stdout.read().decode().strip()
-
-            if output == 'NOT_RUNNING':
-                # Check the log for errors
-                stdin, stdout, stderr = ssh.exec_command(
-                    'tail -50 /home/ubuntu/worker.log 2>&1 || cat /home/ubuntu/nohup.out 2>&1'
-                )
-                log_output = stdout.read().decode()
-                log.error(f'Worker process failed to start. Log output:\n{log_output}')
-                raise RuntimeError(f'Worker process failed to start on {self.name}')
-
-            log.info(f'Worker process started successfully on {self.name} with PID(s): {output}')
-
+            for cmd in (
+                'gcloud auth activate-service-account --key-file=/home/ubuntu/gsa-key.json',
+                'gcloud auth configure-docker us-docker.pkg.dev --quiet',
+            ):
+                stdin, stdout, stderr = ssh.exec_command(cmd)
+                rc = stdout.channel.recv_exit_status()
+                if rc != 0:
+                    err = stderr.read().decode()
+                    raise RuntimeError(f'`{cmd}` exited {rc}: {err}')
         finally:
             ssh.close()
+
+    async def run_worker_container(
+        self,
+        file_store,
+        max_idle_time_msecs: int,
+        unreserved_disk_size_gb: int,
+    ) -> None:
+        env_vars = await self._build_worker_env_vars(file_store, max_idle_time_msecs, unreserved_disk_size_gb)
+        env_args = ' '.join(f'-e {k}={shlex.quote(v)}' for k, v in env_vars.items())
+        batch_worker_image = env_vars['BATCH_WORKER_IMAGE']
+        docker_cmd = (
+            f'docker pull {shlex.quote(batch_worker_image)} && '
+            f'docker run -d --name worker '
+            f'{env_args} '
+            f'-v /home/ubuntu/gsa-key.json:/gsa-key.json:ro '
+            f'-v /var/run/docker.sock:/var/run/docker.sock '
+            f'-v /usr/bin/docker:/usr/bin/docker '
+            f'-v /batch:/batch:shared '
+            f'-v /logs:/logs '
+            f'-v /global-config:/global-config '
+            f'-v /cloudfuse:/cloudfuse:shared '
+            f'-v /etc/netns:/etc/netns '
+            f'-v /sys/fs/cgroup:/sys/fs/cgroup '
+            f'--mount type=bind,source=/host,target=/host '
+            f'-p 5000:5000 '
+            f'--device /dev/fuse '
+            f'--privileged --cap-add SYS_ADMIN --userns host --pid host --cgroupns host '
+            f'--network host '
+            f'--runtime=nvidia --gpus all '
+            f'{shlex.quote(batch_worker_image)} '
+            f'python3 -u -m batch.worker.worker'
+        )
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._ssh_exec_blocking, docker_cmd, 'docker pull + run')
+        await self._poll_worker_healthcheck()
+
+    def _ssh_exec_blocking(self, command: str, label: str) -> str:
+        with open('/lambda-ssh-key/lambda-ssh-key', 'r') as key_file:
+            private_key = paramiko.RSAKey.from_private_key(key_file)
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(hostname=self.ip_address, username='ubuntu', pkey=private_key)
+        try:
+            stdin, stdout, stderr = ssh.exec_command(command, timeout=300)
+            rc = stdout.channel.recv_exit_status()
+            out = stdout.read().decode()
+            err = stderr.read().decode()
+            if rc != 0:
+                raise RuntimeError(f'{label} on {self.name} exited {rc}: stdout={out!r} stderr={err!r}')
+            return out
+        finally:
+            ssh.close()
+
+    async def _poll_worker_healthcheck(self) -> None:
+        for _ in range(120):
+            try:
+                async with self.client_session.get(
+                    f'http://{self.ip_address}:5000/healthcheck',
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status == 200:
+                        log.info(f'Worker healthy on {self.name}')
+                        return
+            except Exception:
+                pass
+            await asyncio.sleep(1)
+        raise RuntimeError(f'Worker on {self.name} did not respond to /healthcheck within 120s')
 
     @property
     def failed_request_count(self):

@@ -115,11 +115,6 @@ class LambdaResourceManager(CloudResourceManager):
         boot_disk_size_gb: int,
         job_private: bool,
         location: str,
-        # NEW: Setup context values with defaults
-        batch_logs_storage_uri: str = '',
-        batch_instance_id: str = 'test-lambda-instance',
-        max_idle_time_msecs: int = 300000,
-        unreserved_disk_size_gb: int = 10,
     ):
         return LambdaSlimInstanceConfig.create(
             product_versions=self.billing_manager.product_versions,
@@ -128,10 +123,6 @@ class LambdaResourceManager(CloudResourceManager):
             job_private=job_private,
             location=location,
             instance_id=None,
-            batch_logs_storage_uri=batch_logs_storage_uri,
-            batch_instance_id=batch_instance_id,
-            max_idle_time_msecs=max_idle_time_msecs,
-            unreserved_disk_size_gb=unreserved_disk_size_gb,
         )
 
     async def update_lambda_vm_instance_id(self, machine_name, instance_config):

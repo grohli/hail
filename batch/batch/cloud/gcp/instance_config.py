@@ -1,4 +1,3 @@
-import logging
 from typing import List, Optional, Union
 
 from ...driver.billing_manager import ProductVersions
@@ -124,7 +123,6 @@ class GCPSlimInstanceConfig(InstanceConfig):
 
     @staticmethod
     def from_dict(data: dict) -> 'GCPSlimInstanceConfig':
-        logging.error(f'data dict gcp slim instance: {data}')
         assert data['version'] == GCP_INSTANCE_CONFIG_VERSION
 
         machine_type = data['machine_type']
@@ -170,15 +168,11 @@ class LambdaSlimInstanceConfig(InstanceConfig):
         job_private: bool,
         location: str,
         instance_id: Optional[str],
-        batch_logs_storage_uri: str = '',
-        batch_instance_id: str = 'test-lambda-instance',
-        max_idle_time_msecs: int = 300000,
-        unreserved_disk_size_gb: int = 10,
     ) -> 'LambdaSlimInstanceConfig':  # pylint: disable=unused-argument
         machine_type_parts = lambda_machine_type_to_parts(machine_type)
         assert machine_type_parts is not None, machine_type
-        # instance_family = machine_type_parts.machine_family
-        region = 'us-central1'
+        # location is the Lambda region (e.g. "us-east-1"); use it directly for pricing.
+        region = location
 
         resources = []
 
@@ -197,10 +191,6 @@ class LambdaSlimInstanceConfig(InstanceConfig):
             resources=resources,
             instance_id=instance_id,
             location=location,
-            batch_logs_storage_uri=batch_logs_storage_uri,
-            batch_instance_id=batch_instance_id,
-            max_idle_time_msecs=max_idle_time_msecs,
-            unreserved_disk_size_gb=unreserved_disk_size_gb,
         )
 
     def __init__(
@@ -209,12 +199,8 @@ class LambdaSlimInstanceConfig(InstanceConfig):
         preemptible: bool,
         job_private: bool,
         resources: List[GCPResource],
-        instance_id: str,
-        location: str,
-        batch_logs_storage_uri: str = '',
-        batch_instance_id: str = 'test-lambda-instance',
-        max_idle_time_msecs: int = 300000,
-        unreserved_disk_size_gb: int = 10,
+        instance_id: Optional[str],
+        location: Optional[str],
     ):
         self.cloud = 'lambda'
         self._machine_type = machine_type
@@ -230,10 +216,6 @@ class LambdaSlimInstanceConfig(InstanceConfig):
         self.resources = resources
         self.instance_id = instance_id
         self.location = location
-        self.batch_logs_storage_uri = batch_logs_storage_uri
-        self.batch_instance_id = batch_instance_id
-        self.max_idle_time_msecs = max_idle_time_msecs
-        self.unreserved_disk_size_gb = unreserved_disk_size_gb
 
     def worker_type(self) -> str:
         return self._worker_type
@@ -244,6 +226,7 @@ class LambdaSlimInstanceConfig(InstanceConfig):
     def region_for(self, location: Optional[str]) -> str:
         if self.location is not None:
             return self.location
+        assert location is not None, 'location must be set on LambdaSlimInstanceConfig before calling region_for'
         return location
 
     @staticmethod
@@ -253,25 +236,17 @@ class LambdaSlimInstanceConfig(InstanceConfig):
         machine_type = data['machine_type']
         preemptible = data['preemptible']
         job_private = data['job_private']
-        batch_logs_storage_uri = data.get('batch_logs_storage_uri', '')
-        batch_instance_id = data.get('batch_instance_id', 'test-lambda-instance')
-        max_idle_time_msecs = data.get('max_idle_time_msecs', 300000)
-        unreserved_disk_size_gb = data.get('unreserved_disk_size_gb', 10)
 
         assert 'resources' in data and data['resources'] is not None
         resources = [gcp_resource_from_dict(data) for data in data['resources']]
 
         return LambdaSlimInstanceConfig(
-            machine_type,
-            preemptible,
-            job_private,
-            resources,
-            data.get('instance_id'),
-            data.get('location'),
-            batch_logs_storage_uri,
-            batch_instance_id,
-            max_idle_time_msecs,
-            unreserved_disk_size_gb,
+            machine_type=machine_type,
+            preemptible=preemptible,
+            job_private=job_private,
+            resources=resources,
+            instance_id=data.get('instance_id'),
+            location=data.get('location'),
         )
 
     def to_dict(self) -> dict:
@@ -284,8 +259,4 @@ class LambdaSlimInstanceConfig(InstanceConfig):
             'resources': [resource.to_dict() for resource in self.resources],
             'instance_id': self.instance_id,
             'location': self.location,
-            'batch_logs_storage_uri': self.batch_logs_storage_uri,
-            'batch_instance_id': self.batch_instance_id,
-            'max_idle_time_msecs': self.max_idle_time_msecs,
-            'unreserved_disk_size_gb': self.unreserved_disk_size_gb,
         }
