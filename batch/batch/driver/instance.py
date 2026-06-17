@@ -11,6 +11,8 @@ import aiohttp
 import paramiko
 
 from gear import CommonAiohttpAppKeys, Database, transaction
+from gear.cloud_config import get_global_config
+from hailtop.config import get_deploy_config
 from hailtop.humanizex import naturaldelta_msec
 from hailtop.utils import retry_transient_errors, time_msecs, time_msecs_str
 
@@ -297,7 +299,9 @@ VALUES (%s, %s);
             activation_token = record['activation_token']
         assert activation_token is not None
 
-        assert self.ip_address is not None, f'ip_address must be set before calling _build_worker_env_vars on {self.name}'
+        assert self.ip_address is not None, (
+            f'ip_address must be set before calling _build_worker_env_vars on {self.name}'
+        )
 
         ic = self.instance_config
         region = ic.region_for(self.location)
@@ -327,11 +331,13 @@ VALUES (%s, %s);
             'GOOGLE_APPLICATION_CREDENTIALS': '/gsa-key.json',
         }
 
-    async def transfer_credentials_and_configure_docker(self) -> None:
-        """SCP the GSA key to /home/ubuntu/gsa-key.json and configure host gcloud auth for Artifact Registry."""
+    async def prepare_host_runtime(self) -> None:
+        """SCP the GSA key, configure host docker auth, and seed the host directories /
+        config files that the worker container's bind mounts expect."""
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._scp_gsa_key_blocking)
         await loop.run_in_executor(None, self._configure_docker_auth_blocking)
+        await loop.run_in_executor(None, self._prepare_host_dirs_and_config_blocking)
 
     def _scp_gsa_key_blocking(self) -> None:
         with open('/lambda-ssh-key/lambda-ssh-key', 'r') as key_file:
@@ -353,15 +359,60 @@ VALUES (%s, %s);
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         ssh.connect(hostname=self.ip_address, username='ubuntu', pkey=private_key)
         try:
+            # Run as root so root's ~/.docker/config.json gets the Artifact Registry
+            # credential helper; the worker container is launched via `sudo docker run`
+            # below, which uses root's config to authenticate to us-docker.pkg.dev.
             for cmd in (
-                'gcloud auth activate-service-account --key-file=/home/ubuntu/gsa-key.json',
-                'gcloud auth configure-docker us-docker.pkg.dev --quiet',
+                'sudo gcloud auth activate-service-account --key-file=/home/ubuntu/gsa-key.json',
+                'sudo gcloud auth configure-docker us-docker.pkg.dev --quiet',
             ):
                 stdin, stdout, stderr = ssh.exec_command(cmd)
                 rc = stdout.channel.recv_exit_status()
                 if rc != 0:
                     err = stderr.read().decode()
                     raise RuntimeError(f'`{cmd}` exited {rc}: {err}')
+        finally:
+            ssh.close()
+
+    def _prepare_host_dirs_and_config_blocking(self) -> None:
+        # Mirrors the bootstrap that GCP's `create_instance.py` startup script does
+        # before `docker run`: create the directories that the worker container's
+        # bind mounts target, then populate `/global-config/*` (one file per key,
+        # matching `gear.cloud_config.read_config_secret`) and write
+        # `/deploy-config/deploy-config.json`. Lambda VMs have no data disk, so
+        # `/host` is just a plain dir on the boot disk (xfs_quota is disabled
+        # worker-side for CLOUD=='lambda').
+        global_config = get_global_config()
+        deploy_config_json = json.dumps(get_deploy_config().with_location('gce').get_config())
+
+        script_lines = [
+            'set -e',
+            'sudo mkdir -p /host /batch /batch/jvm-container-logs '
+            '/logs /global-config /deploy-config /cloudfuse /etc/netns',
+        ]
+        for key, value in global_config.items():
+            script_lines.append(
+                f'echo -n {shlex.quote(value)} | sudo tee /global-config/{shlex.quote(key)} > /dev/null'
+            )
+        script_lines.append(
+            f'echo -n {shlex.quote(deploy_config_json)} | sudo tee /deploy-config/deploy-config.json > /dev/null'
+        )
+        script = '\n'.join(script_lines)
+
+        with open('/lambda-ssh-key/lambda-ssh-key', 'r') as key_file:
+            private_key = paramiko.RSAKey.from_private_key(key_file)
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(hostname=self.ip_address, username='ubuntu', pkey=private_key)
+        try:
+            stdin, stdout, stderr = ssh.exec_command('bash -s', timeout=60)
+            stdin.write(script)
+            stdin.channel.shutdown_write()
+            rc = stdout.channel.recv_exit_status()
+            if rc != 0:
+                out = stdout.read().decode()
+                err = stderr.read().decode()
+                raise RuntimeError(f'host dir/config prep on {self.name} exited {rc}: stdout={out!r} stderr={err!r}')
         finally:
             ssh.close()
 
@@ -374,9 +425,10 @@ VALUES (%s, %s);
         env_vars = await self._build_worker_env_vars(file_store, max_idle_time_msecs, unreserved_disk_size_gb)
         env_args = ' '.join(f'-e {k}={shlex.quote(v)}' for k, v in env_vars.items())
         batch_worker_image = env_vars['BATCH_WORKER_IMAGE']
+        # `ubuntu` is not in the docker group on Lambda VMs; use passwordless sudo.
         docker_cmd = (
-            f'docker pull {shlex.quote(batch_worker_image)} && '
-            f'docker run -d --name worker '
+            f'sudo docker pull {shlex.quote(batch_worker_image)} && '
+            f'sudo docker run -d --name worker '
             f'{env_args} '
             f'-v /home/ubuntu/gsa-key.json:/gsa-key.json:ro '
             f'-v /var/run/docker.sock:/var/run/docker.sock '
@@ -384,6 +436,7 @@ VALUES (%s, %s);
             f'-v /batch:/batch:shared '
             f'-v /logs:/logs '
             f'-v /global-config:/global-config '
+            f'-v /deploy-config:/deploy-config '
             f'-v /cloudfuse:/cloudfuse:shared '
             f'-v /etc/netns:/etc/netns '
             f'-v /sys/fs/cgroup:/sys/fs/cgroup '
@@ -392,13 +445,12 @@ VALUES (%s, %s);
             f'--device /dev/fuse '
             f'--privileged --cap-add SYS_ADMIN --userns host --pid host --cgroupns host '
             f'--network host '
-            f'--runtime=nvidia --gpus all '
+            f'--gpus all '
             f'{shlex.quote(batch_worker_image)} '
             f'python3 -u -m batch.worker.worker'
         )
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._ssh_exec_blocking, docker_cmd, 'docker pull + run')
-        await self._poll_worker_healthcheck()
 
     def _ssh_exec_blocking(self, command: str, label: str) -> str:
         with open('/lambda-ssh-key/lambda-ssh-key', 'r') as key_file:
@@ -416,21 +468,6 @@ VALUES (%s, %s);
             return out
         finally:
             ssh.close()
-
-    async def _poll_worker_healthcheck(self) -> None:
-        for _ in range(120):
-            try:
-                async with self.client_session.get(
-                    f'http://{self.ip_address}:5000/healthcheck',
-                    timeout=aiohttp.ClientTimeout(total=5),
-                ) as resp:
-                    if resp.status == 200:
-                        log.info(f'Worker healthy on {self.name}')
-                        return
-            except Exception:
-                pass
-            await asyncio.sleep(1)
-        raise RuntimeError(f'Worker on {self.name} did not respond to /healthcheck within 120s')
 
     @property
     def failed_request_count(self):

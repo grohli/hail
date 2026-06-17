@@ -365,9 +365,8 @@ class InstanceCollection:
     async def _set_up_lambda_vm(self, instance: Instance):
         log.info(f'LambdaVM {instance.name}: starting docker-run bootstrap')
         try:
-            lambda_ip_addr = await self._get_lambda_ip_address(instance)
-            await instance.activate(lambda_ip_addr, time_msecs())
-            await instance.transfer_credentials_and_configure_docker()
+            await self._get_lambda_ip_address(instance)
+            await instance.prepare_host_runtime()
             # Use cached values set at create time; fall back to safe defaults for driver restarts.
             max_idle_time_msecs = getattr(instance, '_lambda_max_idle_time_msecs', 300_000)
             unreserved_disk_size_gb = getattr(instance, '_lambda_unreserved_disk_size_gb', 10)
