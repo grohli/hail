@@ -51,16 +51,20 @@ class LambdaResourceManager(CloudResourceManager):
         HEADERS = {'Authorization': f'Bearer {API_KEY}', 'Content-Type': 'application/json'}
         instance_id = instance.instance_config.instance_id
 
-        if instance_id:
-            url = f'{BASE_URL}instance-operations/terminate'
-            payload = {"instance_ids": [instance_id]}
-            try:
-                await self.client_session.post(url, headers=HEADERS, json=payload)
-                log.info(f'Terminated Lambda Labs machine {instance_id}')
-            except aiohttp.ClientResponseError as e:
-                if e.status == 404:
-                    raise VMDoesNotExist() from e
-                raise
+        if not instance_id:
+            # No Lambda VM was ever provisioned for this instance (launch failed
+            # mid-flight); signal removal so the driver evicts it from tracking.
+            raise VMDoesNotExist()
+
+        url = f'{BASE_URL}instance-operations/terminate'
+        payload = {"instance_ids": [instance_id]}
+        try:
+            await self.client_session.post(url, headers=HEADERS, json=payload)
+            log.info(f'Terminated Lambda Labs machine {instance_id}')
+        except aiohttp.ClientResponseError as e:
+            if e.status == 404:
+                raise VMDoesNotExist() from e
+            raise
 
     async def get_vm_state(self, instance: Instance) -> VMState:
         API_KEY = os.environ['LAMBDA_API_KEY']
@@ -95,7 +99,7 @@ class LambdaResourceManager(CloudResourceManager):
             if state == 'terminating':
                 return VMStateTerminated(spec)
             if state == 'terminated':
-                return VMDoesNotExist()
+                raise VMDoesNotExist()
             log.exception(f'Unknown lambda state {state} for {instance}')
             return UnknownVMState(spec)
         except aiohttp.ClientResponseError as e:

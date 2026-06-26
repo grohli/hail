@@ -171,8 +171,13 @@ class LambdaSlimInstanceConfig(InstanceConfig):
     ) -> 'LambdaSlimInstanceConfig':  # pylint: disable=unused-argument
         machine_type_parts = lambda_machine_type_to_parts(machine_type)
         assert machine_type_parts is not None, machine_type
-        # location is the Lambda region (e.g. "us-east-1"); use it directly for pricing.
-        region = location
+        # Lambda billing is a placeholder (MVP); Lambda regions are not in the GCP
+        # product-versions table, and `location` at config-creation time is the
+        # literal 'lambda' returned by choose_location (the real Lambda region is
+        # only known after create_vm calls the Lambda API). Pin the accelerator
+        # pricing lookup to a real GCP region so it resolves. self.location still
+        # carries the actual Lambda region for non-billing uses once populated.
+        pricing_region = 'us-central1'
 
         resources = []
 
@@ -181,7 +186,7 @@ class LambdaSlimInstanceConfig(InstanceConfig):
 
         num_gpus = machine_type_to_gpu_num(machine_type)
         resources.append(
-            GCPAcceleratorResource.create(product_versions, accelerator_family, preemptible, region, num_gpus)
+            GCPAcceleratorResource.create(product_versions, accelerator_family, preemptible, pricing_region, num_gpus)
         )
 
         return LambdaSlimInstanceConfig(
