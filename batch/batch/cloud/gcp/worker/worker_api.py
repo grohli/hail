@@ -34,7 +34,7 @@ class GCPWorkerAPI(CloudWorkerAPI):
         self,
         project: str,
         zone: str,
-        worker_credentials: aiogoogle.GoogleInstanceMetadataCredentials,
+        worker_credentials: aiogoogle.GoogleCredentials,
         http_session: httpx.ClientSession,
     ):
         self.project = project
@@ -145,3 +145,39 @@ class GCPWorkerAPI(CloudWorkerAPI):
 
     def __str__(self):
         return f'project={self.project} zone={self.zone}'
+
+
+class LambdaWorkerAPI(GCPWorkerAPI):
+    """
+    Lambda Labs worker variant. Lambda VMs aren't in the GCP VPC and have no metadata
+    server, so worker credentials must come from the GSA key file the driver mounts at
+    /gsa-key.json (also exported as GOOGLE_APPLICATION_CREDENTIALS).
+
+    All worker -> driver calls go over the public internet via `internal.hail.is`, which
+    is fronted by the `gateway` Envoy. That gateway's `ext_authz` filter only forwards
+    the `Cookie` and `X-Hail-Internal-Authorization` headers to the auth service's
+    `verify_dev_credentials` endpoint (`gateway/envoy.yaml`), and that endpoint requires
+    the token to resolve to a developer user (`is_developer == 1`). A GCP access token
+    can't satisfy that; the token must be a Hail session id known to the default-namespace
+    auth DB. The driver looks it up and passes it to the worker as `HAIL_INTERNAL_TOKEN`;
+    `extra_hail_headers` returns it as `X-Hail-Internal-Authorization`. The downstream
+    `activating_instances_only` decorator (`batch/driver/main.py:141`) still validates
+    the `X-Hail-Instance-*` headers that `Worker.headers()` always sends.
+    """
+
+    nameserver_ip = '8.8.8.8'
+
+    @staticmethod
+    async def from_env() -> 'LambdaWorkerAPI':
+        project = os.environ['PROJECT']
+        zone = os.environ['ZONE'].rsplit('/', 1)[1]
+        gsa_key_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', '/gsa-key.json')
+        # Used for Artifact Registry (cloud-platform scope) image pulls, not for
+        # worker -> driver auth (see class docstring).
+        worker_credentials = aiogoogle.GoogleCredentials.from_file(gsa_key_path)
+        assert isinstance(worker_credentials, aiogoogle.GoogleServiceAccountCredentials)
+        http_session = httpx.client_session()
+        return LambdaWorkerAPI(project, zone, worker_credentials, http_session)
+
+    async def extra_hail_headers(self) -> Dict[str, str]:
+        return {'X-Hail-Internal-Authorization': f'Bearer {os.environ["HAIL_INTERNAL_TOKEN"]}'}

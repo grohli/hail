@@ -285,6 +285,9 @@ spec:
          - name: lambda-ssh-key
            mountPath: /lambda-ssh-key
            readOnly: true
+         - name: hail-internal-token
+           mountPath: /hail-internal-token
+           readOnly: true
          - name: ssl-config-batch-driver
            mountPath: /ssl-config
            readOnly: true
@@ -318,6 +321,10 @@ spec:
        - name: lambda-ssh-key
          secret:
            secretName: lambda-ssh-key
+           defaultMode: 0400
+       - name: hail-internal-token
+         secret:
+           secretName: hail-internal-token
            defaultMode: 0400
        - name: ssl-config-batch-driver
          secret:

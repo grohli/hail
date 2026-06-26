@@ -29,6 +29,12 @@ from ..resource_manager import (
 SIXTY_SECONDS_NS = 60 * 1000 * 1000 * 1000
 CACHE_CAPACITY = 1000
 
+# Minimum interval between periodic `sudo docker logs worker` uploads from a single
+# Lambda instance. Each upload is one SSH + one full-log GCS write; 60s is comfortably
+# below the check_on_instance cadence and gives a near-current snapshot without
+# hammering the VM.
+LAMBDA_WORKER_LOG_UPLOAD_INTERVAL_MSECS = 60 * 1000
+
 log = logging.getLogger('inst_coll_manager')
 
 
@@ -377,6 +383,10 @@ class InstanceCollection:
             )
             instance._lambda_setup_completed = True
             log.info(f'LambdaVM {instance.name} docker-run bootstrap completed')
+            log.info(
+                f'LambdaVM {instance.name} worker logs will be shipped to '
+                f'{instance.lambda_worker_log_url(self.app["file_store"])}'
+            )
         except Exception as e:
             log.error(f'LambdaVM {instance.name} docker-run bootstrap failed: {e}')
             raise e
@@ -394,8 +404,6 @@ class InstanceCollection:
         data_disk_size_gb,
         boot_disk_size_gb,
     ) -> Tuple[Instance, List[QuantifiedResource]]:
-        from ...cloud.resource_utils import unreserved_worker_data_disk_size_gib
-
         location = self.choose_location(
             cores, local_ssd_data_disk, data_disk_size_gb, preemptible, regions, machine_type
         )
@@ -428,7 +436,15 @@ class InstanceCollection:
         # These are in-memory only and not persisted; a driver restart will re-use defaults.
         if self.cloud == 'lambda':
             instance._lambda_max_idle_time_msecs = max_idle_time_msecs
-            instance._lambda_unreserved_disk_size_gb = unreserved_worker_data_disk_size_gib(data_disk_size_gb, cores)
+            # Lambda VMs ship with a single fixed boot disk (1400+ GiB on the smallest
+            # GPU machine types), not a separately-provisioned data disk sized to the job's
+            # storage request. The GCP-style `unreserved_worker_data_disk_size_gib` formula
+            # (data_disk - 30 - 5*cores) goes negative here because `data_disk_size_gb` is
+            # the small job-requested value. xfs_quota is disabled worker-side for
+            # CLOUD=='lambda', so this only feeds the in-memory `data_disk_space_remaining`
+            # accounting cap; use a conservative fixed value below the smallest Lambda boot
+            # disk we'd use.
+            instance._lambda_unreserved_disk_size_gb = 1000
         total_resources_on_instance = await self.resource_manager.create_vm(
             file_store=app['file_store'],
             machine_name=machine_name,
@@ -453,6 +469,12 @@ class InstanceCollection:
             return
         if instance.state not in ('inactive', 'deleted'):
             await instance.deactivate(reason, timestamp)
+
+        # Final flush of the worker's docker logs before the VM is destroyed; without
+        # this, post-mortem debugging requires SSH which is impossible once the VM
+        # is gone. The upload is best-effort and won't block delete.
+        if self.cloud == 'lambda' and getattr(instance, '_lambda_setup_completed', False):
+            await instance.upload_worker_docker_logs(self.app['file_store'])
 
         try:
             await self.resource_manager.delete_vm(instance)
@@ -490,6 +512,16 @@ class InstanceCollection:
             except Exception as e:
                 log.error(f'LambdaVM {instance.name} setup failed: {e}')
                 # Don't re-raise - let VM continue normal lifecycle
+
+        # Periodic snapshot of `sudo docker logs worker` to GCS so the worker's
+        # stdout/stderr is recoverable after the VM is killed. Throttled so each
+        # instance ships at most once per LAMBDA_WORKER_LOG_UPLOAD_INTERVAL_MSECS.
+        if instance.inst_coll.cloud == 'lambda' and getattr(instance, '_lambda_setup_completed', False):
+            now = time_msecs()
+            last = getattr(instance, '_lambda_last_log_upload_msecs', 0)
+            if now - last >= LAMBDA_WORKER_LOG_UPLOAD_INTERVAL_MSECS:
+                instance._lambda_last_log_upload_msecs = now
+                await instance.upload_worker_docker_logs(self.app['file_store'])
 
         # Cases are mutually exclusive and therefore order-independent
         if instance.state == 'pending' and isinstance(vm_state, (VMStateCreating, VMStateRunning)):

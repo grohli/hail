@@ -71,7 +71,7 @@ from hailtop.utils import (
 from ..batch_format_version import BatchFormatVersion
 from ..cloud.azure.worker.worker_api import AzureWorkerAPI
 from ..cloud.gcp.resource_utils import is_gpu
-from ..cloud.gcp.worker.worker_api import GCPWorkerAPI
+from ..cloud.gcp.worker.worker_api import GCPWorkerAPI, LambdaWorkerAPI
 from ..cloud.resource_utils import (
     is_valid_storage_request,
     machine_type_to_cores_and_memory_bytes,
@@ -1985,11 +1985,17 @@ class DockerJob(Job):
                     data_disk_storage_in_bytes = storage_gib_to_bytes(self.data_disk_storage_in_gib)
 
                 with self.step('configuring xfsquota'):
-                    # Quota will not be applied to `/io` if the job has an attached disk mounted there
-                    await check_shell_output(f'xfs_quota -x -c "project -s -p {self.scratch} {self.project_id}" /host/')
-                    await check_shell_output(
-                        f'xfs_quota -x -c "limit -p bsoft={data_disk_storage_in_bytes} bhard={data_disk_storage_in_bytes} {self.project_id}" /host/'
-                    )
+                    # Lambda VMs have no separate XFS data disk mounted at /host, so quotas
+                    # are unenforceable. Jobs that rely on per-job storage caps must run on
+                    # GCP/Azure.
+                    if CLOUD != 'lambda':
+                        # Quota will not be applied to `/io` if the job has an attached disk mounted there
+                        await check_shell_output(
+                            f'xfs_quota -x -c "project -s -p {self.scratch} {self.project_id}" /host/'
+                        )
+                        await check_shell_output(
+                            f'xfs_quota -x -c "limit -p bsoft={data_disk_storage_in_bytes} bhard={data_disk_storage_in_bytes} {self.project_id}" /host/'
+                        )
 
                 with self.step('populating secrets'):
                     if self.secrets:
@@ -2000,9 +2006,10 @@ class DockerJob(Job):
                     if self.cloudfuse:
                         os.makedirs(self.cloudfuse_base_path())
 
-                        await check_shell_output(
-                            f'xfs_quota -x -c "project -s -p {self.cloudfuse_base_path()} {self.project_id}" /host/'
-                        )
+                        if CLOUD != 'lambda':
+                            await check_shell_output(
+                                f'xfs_quota -x -c "project -s -p {self.cloudfuse_base_path()} {self.project_id}" /host/'
+                            )
 
                         assert CLOUD_WORKER_API
                         for config in self.cloudfuse:
@@ -2114,13 +2121,14 @@ class DockerJob(Job):
             if self.cloudfuse_base_path() in output:
                 raise IncompleteCloudFuseCleanup(f'incomplete cloudfuse unmounting: {output}')
 
-        try:
-            async with async_timeout.timeout(120):
-                await check_shell(f'xfs_quota -x -c "limit -p bsoft=0 bhard=0 {self.project_id}" /host')
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception(f'while resetting xfs_quota project {self.project_id} for job {self.id}')
+        if CLOUD != 'lambda':
+            try:
+                async with async_timeout.timeout(120):
+                    await check_shell(f'xfs_quota -x -c "limit -p bsoft=0 bhard=0 {self.project_id}" /host')
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(f'while resetting xfs_quota project {self.project_id} for job {self.id}')
 
         try:
             async with async_timeout.timeout(120):
@@ -2307,16 +2315,18 @@ class JVMJob(Job):
 
                 self.state = 'initializing'
 
-                await check_shell_output(f'xfs_quota -x -c "project -s -p {self.scratch} {self.project_id}" /host/')
-                await check_shell_output(
-                    f'xfs_quota -x -c "limit -p bsoft={self.data_disk_storage_in_gib} bhard={self.data_disk_storage_in_gib} {self.project_id}" /host/'
-                )
+                if CLOUD != 'lambda':
+                    await check_shell_output(f'xfs_quota -x -c "project -s -p {self.scratch} {self.project_id}" /host/')
+                    await check_shell_output(
+                        f'xfs_quota -x -c "limit -p bsoft={self.data_disk_storage_in_gib} bhard={self.data_disk_storage_in_gib} {self.project_id}" /host/'
+                    )
 
                 with self.step('adding cloudfuse support'):
                     if self.cloudfuse:
-                        await check_shell_output(
-                            f'xfs_quota -x -c "project -s -p {self.cloudfuse_base_path()} {self.project_id}" /host/'
-                        )
+                        if CLOUD != 'lambda':
+                            await check_shell_output(
+                                f'xfs_quota -x -c "project -s -p {self.cloudfuse_base_path()} {self.project_id}" /host/'
+                            )
 
                         assert CLOUD_WORKER_API
                         for config in self.cloudfuse:
@@ -2458,7 +2468,8 @@ class JVMJob(Job):
             self.jvm = None
 
         try:
-            await check_shell(f'xfs_quota -x -c "limit -p bsoft=0 bhard=0 {self.project_id}" /host')
+            if CLOUD != 'lambda':
+                await check_shell(f'xfs_quota -x -c "limit -p bsoft=0 bhard=0 {self.project_id}" /host')
             await blocking_to_async(self.pool, shutil.rmtree, self.scratch, ignore_errors=True)
         except asyncio.CancelledError:
             raise
@@ -3100,8 +3111,13 @@ class Worker:
 
     async def headers(self) -> Dict[str, str]:
         headers = {'X-Hail-Instance-Name': NAME, 'X-Hail-Instance-Token': self.instance_token}
-        if isinstance(CLOUD_WORKER_API, TerraAzureWorkerAPI):
-            headers.update(await CLOUD_WORKER_API.extra_hail_headers())
+        # `extra_hail_headers` is a no-op on the in-VPC clouds (GCP, Azure) where the
+        # worker reaches the driver through the internal gateway directly. For Lambda it
+        # returns `X-Hail-Internal-Authorization: Bearer <hail-session-id>`, which is
+        # the only header (besides `Cookie`) the public gateway's ext_authz filter
+        # forwards to the auth service to satisfy `verify_dev_credentials`.
+        assert CLOUD_WORKER_API
+        headers.update(await CLOUD_WORKER_API.extra_hail_headers())
         return headers
 
     async def shutdown(self):
@@ -3310,7 +3326,13 @@ class Worker:
 
         app_runner = web.AppRunner(app, access_log_class=BatchWorkerAccessLogger)
         await app_runner.setup()
-        site = web.TCPSite(app_runner, IP_ADDRESS, 5000)
+        # On GCP/Azure `IP_ADDRESS` is the VM's VPC-internal NIC address and is bindable.
+        # On Lambda it's the public IP, which isn't configured on any local interface
+        # (Lambda NATs it upstream), so bind to 0.0.0.0 instead. `IP_ADDRESS` is still
+        # what the worker sends to the driver in `activate()` and what gets exposed to
+        # job containers, both of which need the driver/job-reachable address.
+        bind_address = '0.0.0.0' if CLOUD == 'lambda' else IP_ADDRESS
+        site = web.TCPSite(app_runner, bind_address, 5000)
         await site.start()
 
         try:
@@ -3558,8 +3580,10 @@ async def async_main():
     image_lock = aiorwlock.RWLock()
     docker = aiodocker.Docker()
 
-    if CLOUD in ('gcp', 'lambda'):
+    if CLOUD == 'gcp':
         CLOUD_WORKER_API = await GCPWorkerAPI.from_env()
+    elif CLOUD == 'lambda':
+        CLOUD_WORKER_API = await LambdaWorkerAPI.from_env()
     else:
         assert CLOUD == 'azure'
         if os.environ.get('HAIL_TERRA'):

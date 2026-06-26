@@ -23,6 +23,21 @@ from ..instance_config import InstanceConfig
 log = logging.getLogger('instance')
 
 
+# Path the batch-driver pod mounts the `hail-internal-token` secret at. The secret
+# holds a `tokens.json` whose `"default"` entry is a Hail session id for a developer
+# user; the Lambda worker uses it as `X-Hail-Internal-Authorization` to clear the
+# public gateway's OAuth proxy. See `LambdaWorkerAPI.extra_hail_headers`.
+HAIL_INTERNAL_TOKEN_FILE = '/hail-internal-token/tokens.json'
+
+
+def _read_hail_internal_token() -> Optional[str]:
+    try:
+        with open(HAIL_INTERNAL_TOKEN_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)['default']
+    except FileNotFoundError:
+        return None
+
+
 class Instance:
     @staticmethod
     def from_record(app, inst_coll, record):
@@ -308,6 +323,12 @@ VALUES (%s, %s);
         # Preserve the rsplit('/', 1)[1] parse in GCPWorkerAPI.from_env()
         synthetic_zone = f'projects/hail-vdc/zones/{region}-b'
 
+        hail_internal_token = _read_hail_internal_token()
+        assert hail_internal_token is not None, (
+            f'{HAIL_INTERNAL_TOKEN_FILE} is missing; create the `hail-internal-token` '
+            f'k8s secret (see batch/deployment.yaml)'
+        )
+
         return {
             'CLOUD': 'lambda',
             'PROJECT': os.environ.get('PROJECT', 'hail-vdc'),
@@ -329,6 +350,7 @@ VALUES (%s, %s);
             'ACCEPTABLE_QUERY_JAR_URL_PREFIX': ACCEPTABLE_QUERY_JAR_URL_PREFIX,
             'INTERNAL_GATEWAY_IP': INTERNAL_GATEWAY_IP,
             'GOOGLE_APPLICATION_CREDENTIALS': '/gsa-key.json',
+            'HAIL_INTERNAL_TOKEN': hail_internal_token,
         }
 
     async def prepare_host_runtime(self) -> None:
@@ -383,7 +405,13 @@ VALUES (%s, %s);
         # `/host` is just a plain dir on the boot disk (xfs_quota is disabled
         # worker-side for CLOUD=='lambda').
         global_config = get_global_config()
-        deploy_config_json = json.dumps(get_deploy_config().with_location('gce').get_config())
+        # Lambda VMs aren't in the GCP VPC so they reach the driver via the public
+        # `https://internal.hail.is/...` endpoint, which is fronted by the `gateway`
+        # Envoy. `LambdaWorkerAPI.extra_hail_headers` supplies an
+        # `X-Hail-Internal-Authorization: Bearer ...` Hail session id that the gateway's
+        # ext_authz filter forwards to auth's `verify_dev_credentials`; the
+        # `activating_instances_only` decorator behind it then checks X-Hail-Instance-*.
+        deploy_config_json = json.dumps(get_deploy_config().with_location('external').get_config())
 
         script_lines = [
             'set -e',
@@ -426,9 +454,18 @@ VALUES (%s, %s);
         env_args = ' '.join(f'-e {k}={shlex.quote(v)}' for k, v in env_vars.items())
         batch_worker_image = env_vars['BATCH_WORKER_IMAGE']
         # `ubuntu` is not in the docker group on Lambda VMs; use passwordless sudo.
+        # `BATCH_WORKER_IMAGE_ID` and `INTERNET_INTERFACE` are read at worker.py import time
+        # and have to be derived on the VM (post-pull image id; the host's default-route NIC).
+        # GCP's create_instance.py does the equivalent in its startup script.
         docker_cmd = (
+            f'set -e && '
             f'sudo docker pull {shlex.quote(batch_worker_image)} && '
+            f'BATCH_WORKER_IMAGE_ID=$(sudo docker inspect {shlex.quote(batch_worker_image)} '
+            f"--format='{{{{.Id}}}}' | cut -d: -f2) && "
+            f"INTERNET_INTERFACE=$(ip -o route show default | awk '{{print $5; exit}}') && "
             f'sudo docker run -d --name worker '
+            f'-e BATCH_WORKER_IMAGE_ID="$BATCH_WORKER_IMAGE_ID" '
+            f'-e INTERNET_INTERFACE="$INTERNET_INTERFACE" '
             f'{env_args} '
             f'-v /home/ubuntu/gsa-key.json:/gsa-key.json:ro '
             f'-v /var/run/docker.sock:/var/run/docker.sock '
@@ -468,6 +505,42 @@ VALUES (%s, %s);
             return out
         finally:
             ssh.close()
+
+    def lambda_worker_log_url(self, file_store) -> str:
+        return (
+            f'{file_store.batch_logs_storage_uri}/batch/lambda-worker-logs/'
+            f'{file_store.instance_id}/{self.name}.log'
+        )
+
+    async def upload_worker_docker_logs(self, file_store) -> None:
+        """SSH to the Lambda VM, capture `sudo docker logs worker` (stdout+stderr),
+        and overwrite the GCS object at `lambda_worker_log_url`. This is the only
+        place the worker's stdout/stderr survives after the VM is killed. Safe to
+        call repeatedly; each call rewrites the full snapshot.
+
+        Errors (SSH unreachable, docker not yet running, GCS write failure) are
+        logged and swallowed — they must never interfere with the lifecycle loop.
+        """
+        if not self.ip_address:
+            return
+        loop = asyncio.get_event_loop()
+        try:
+            # `|| true` keeps rc=0 if the container isn't there yet so we still
+            # upload whatever was captured (often nothing, which is itself signal).
+            out = await loop.run_in_executor(
+                None,
+                self._ssh_exec_blocking,
+                'sudo docker logs worker 2>&1 || true',
+                'fetch worker docker logs',
+            )
+        except Exception as e:
+            log.warning(f'{self}: could not fetch worker docker logs over SSH: {e}')
+            return
+        url = self.lambda_worker_log_url(file_store)
+        try:
+            await file_store.fs.write(url, out.encode('utf-8'))
+        except Exception:
+            log.exception(f'{self}: could not upload worker docker logs to {url}')
 
     @property
     def failed_request_count(self):
